@@ -2,19 +2,22 @@ import { Bot } from "grammy";
 import type { Config } from "./config.js";
 import type { ChatStore } from "./chatStore.js";
 import type { MessageHub } from "./messageHub.js";
+import type { SessionSupervisor } from "./supervisor.js";
 
 /**
  * Create the grammy bot with its update handlers:
  *  - /start          → stub reply
  *  - <passphrase>     → register the sender's chat id (persisted via the store)
- *  - any other text from the registered chat → forwarded into the MessageHub
- *    so MCP tools (tg_ask / tg_get_messages) can read it
+ *  - any other text from the registered chat → offered to the supervisor first
+ *    (which may start/stop a Claude session); if it declines, forwarded into the
+ *    MessageHub so the live session's MCP tools (tg_ask / tg_get_messages) read it
  *  - anything else    → ignored
  */
 export function createBot(
   config: Config,
   store: ChatStore,
   hub: MessageHub,
+  supervisor: SessionSupervisor,
 ): Bot {
   const bot = new Bot(config.token);
 
@@ -34,6 +37,11 @@ export function createBot(
 
     // Only accept messages from the registered chat; ignore strangers.
     if (String(ctx.chat.id) !== store.get()) return;
+
+    // The supervisor may start a new session (no session live) or stop one
+    // (`stop`). If it consumes the message, don't also queue it for the hub.
+    const consumed = await supervisor.handle(text);
+    if (consumed) return;
 
     hub.push({ id: ctx.message.message_id, date: ctx.message.date, text });
   });

@@ -6,6 +6,7 @@ import { createBot } from "./bot.js";
 import { createMcpServer } from "./mcp.js";
 import { createHttpServer } from "./server.js";
 import { createUploader } from "./spaces.js";
+import { SessionSupervisor } from "./supervisor.js";
 
 const config = loadConfig();
 
@@ -13,7 +14,16 @@ const store = new ChatStore(config.chatIdFile);
 store.load();
 
 const hub = new MessageHub();
-const bot = createBot(config, store, hub);
+
+const supervisor = new SessionSupervisor({
+  claudeBin: config.session.claudeBin,
+  cwd: config.session.cwd,
+  addDir: config.session.addDir,
+  logFile: config.session.logFile,
+  notify: (text) => sendMessage(text),
+});
+
+const bot = createBot(config, store, hub, supervisor);
 
 const uploader = config.spaces ? createUploader(config.spaces) : null;
 if (!uploader) {

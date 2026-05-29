@@ -24,6 +24,20 @@ export interface Config {
   chatIdFile: string;
   /** Spaces config, if credentials are available; else null (direct upload). */
   spaces: SpacesConfig | null;
+  /** Telegram-driven Claude Code session settings. */
+  session: SessionConfig;
+}
+
+/** Settings for the auto-spawned Claude Code session. */
+export interface SessionConfig {
+  /** Path to the `claude` CLI binary. */
+  claudeBin: string;
+  /** Working directory the session runs in. */
+  cwd: string;
+  /** Extra directory granted tool access ("/" = full access). */
+  addDir: string;
+  /** File the session's stdout/stderr is appended to. */
+  logFile: string;
 }
 
 /** Load an extra env file into process.env without overriding existing keys. */
@@ -40,7 +54,7 @@ function loadEnvFileSoft(path: string): void {
 
 /** Assemble Spaces config from env, or null if creds are incomplete. */
 function loadSpaces(): SpacesConfig | null {
-  const region = process.env.SPACES_REGION ?? process.env.SPACES_REGIOIN; // note: typo'd key in source .env
+  const region = process.env.SPACES_REGION;
   const bucket = process.env.SPACES_BUCKET_NAME;
   const accessKeyId = process.env.SPACES_ACCESS_KEY_ID;
   const secretAccessKey = process.env.SPACES_ACCESS_KEY_SECRET;
@@ -83,5 +97,13 @@ export function loadConfig(): Config {
     host: process.env.HOST ?? "127.0.0.1",
     chatIdFile: process.env.CHAT_ID_FILE ?? "chat-id.json",
     spaces: loadSpaces(),
+    session: {
+      claudeBin:
+        process.env.CLAUDE_BIN ?? join(homedir(), ".local", "bin", "claude"),
+      cwd: process.env.SESSION_CWD ?? join(homedir(), "devbox"),
+      addDir: process.env.SESSION_ADD_DIR ?? "/",
+      logFile:
+        process.env.SESSION_LOG_FILE ?? join(homedir(), "devbox", "telegram-mcp", "session.log"),
+    },
   };
 }
