@@ -20,6 +20,7 @@ const supervisor = new SessionSupervisor({
   cwd: config.session.cwd,
   addDir: config.session.addDir,
   logFile: config.session.logFile,
+  mcpUrl: `http://${config.host}:${config.port}/mcp`,
   notify: (text) => sendMessage(text),
 });
 
@@ -79,6 +80,15 @@ app.listen(config.port, config.host, () => {
     `telegram-mcp listening on http://${config.host}:${config.port}/mcp`,
   );
 });
+
+// Ensure the spawned claude session never outlives this process: on any exit
+// path, SIGKILL its whole process group. SIGINT/SIGTERM route through
+// process.exit so the synchronous `exit` handler does the killing; an uncaught
+// exception terminates the process and fires `exit` too. (A SIGKILL to *this*
+// process cannot be trapped — run node under an OS supervisor to cover that.)
+process.on("exit", () => supervisor.shutdownSync());
+process.on("SIGINT", () => process.exit(130));
+process.on("SIGTERM", () => process.exit(143));
 
 bot
   .start({

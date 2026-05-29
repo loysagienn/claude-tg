@@ -22,6 +22,8 @@ export interface SupervisorDeps {
   addDir: string;
   /** File to append the child's stdout/stderr to, for debugging. */
   logFile: string;
+  /** URL of this telegram MCP endpoint, injected into the spawned session. */
+  mcpUrl: string;
   /** Send a status line back to the user over Telegram. */
   notify: (text: string) => Promise<void>;
 }
@@ -71,11 +73,22 @@ export class SessionSupervisor {
 
   /** Spawn a new `claude` session with `prompt` as its first instruction. */
   private start(prompt: string): void {
+    // Inject the telegram MCP server only into this child, rather than relying
+    // on a global registration. Without --strict-mcp-config it merges with the
+    // user's other registered servers (so the session still has playwright
+    // etc.), while manual `claude` sessions never see telegram unless the user
+    // passes this config themselves.
+    const mcpConfig = JSON.stringify({
+      mcpServers: { telegram: { type: "http", url: this.deps.mcpUrl } },
+    });
+
     const args = [
       "-p",
       prompt,
       "--append-system-prompt",
       SYSTEM_PROMPT,
+      "--mcp-config",
+      mcpConfig,
       "--add-dir",
       this.deps.addDir,
       "--dangerously-skip-permissions",
@@ -85,6 +98,10 @@ export class SessionSupervisor {
       cwd: this.deps.cwd,
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
+      // Lead its own process group (gpid === pid) so we can signal the whole
+      // group — claude plus anything it spawns — via a negative pid. Lets us
+      // guarantee the session dies with this process (see shutdownSync).
+      detached: true,
     });
     this.child = child;
 
@@ -115,7 +132,7 @@ export class SessionSupervisor {
     });
   }
 
-  /** Kill the live session, if any. */
+  /** Kill the live session — its whole process group — if any. */
   async stop(): Promise<void> {
     const child = this.child;
     if (!child) {
@@ -123,17 +140,34 @@ export class SessionSupervisor {
       return;
     }
     this.child = null;
-    child.kill("SIGTERM");
-    // Escalate if it doesn't die promptly.
     const pid = child.pid;
-    setTimeout(() => {
-      try {
-        if (pid) process.kill(pid, 0); // throws if already gone
-        child.kill("SIGKILL");
-      } catch {
-        // already exited
-      }
-    }, 3000);
+    this.killGroup(pid, "SIGTERM");
+    // Escalate if the group doesn't die promptly.
+    setTimeout(() => this.killGroup(pid, "SIGKILL"), 3000);
     await this.deps.notify("🛑 Session stopped.");
+  }
+
+  /**
+   * Synchronously SIGKILL the session's process group. Safe to call from a
+   * process `exit` handler (no async), so node never leaves an orphaned claude
+   * (or its subprocesses) behind on shutdown. No-op if no session is live.
+   */
+  shutdownSync(): void {
+    this.killGroup(this.child?.pid, "SIGKILL");
+  }
+
+  /**
+   * Send `signal` to the session's process group. The child is spawned
+   * `detached`, so it leads its own group; a negative pid targets that whole
+   * group (claude + any subprocess it spawned). No-op if the pid is unknown or
+   * the group is already gone.
+   */
+  private killGroup(pid: number | undefined, signal: NodeJS.Signals | 0): void {
+    if (pid === undefined) return;
+    try {
+      process.kill(-pid, signal);
+    } catch {
+      // Group already gone.
+    }
   }
 }

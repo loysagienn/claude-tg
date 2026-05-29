@@ -49,6 +49,14 @@ session that you start and stop from Telegram:
 If the child exits on its own, you get a Telegram notice and the next message
 starts a new session. The child's stdout/stderr is appended to `SESSION_LOG_FILE`.
 
+The session is spawned as the leader of its own process group, and the
+supervisor SIGKILLs that whole group (claude **and** anything it spawned) when
+the node process exits — via the `stop` command, a `SIGINT`/`SIGTERM`, or an
+uncaught exception. So the session never outlives its supervisor and no orphan
+is left behind. The one case this can't cover is a `SIGKILL` to the node
+process itself, which the OS delivers untrappably; run node under an OS
+supervisor (systemd/pm2) if you need to survive that.
+
 > ⚠️ **Security:** spawned sessions run with `--dangerously-skip-permissions`
 > and, by default, `--add-dir /` (full filesystem access) with no per-action
 > confirmation. Anyone who knows the passphrase and has the bot can drive them.
@@ -101,11 +109,30 @@ npm run build
 npm start   # reads .env
 ```
 
-## Register with Claude Code
+## Using it from Claude Code
 
-```bash
-claude mcp add --transport http telegram http://127.0.0.1:8765/mcp
-```
+**Do not register this server globally** (`claude mcp add …`). If every session
+sees the telegram tools, a manually-started session can call `tg_get_messages`
+/ `tg_ask` and steal incoming messages from the live Telegram-driven session —
+they share one in-process message queue. Instead the server is scoped to where
+it's wanted:
 
-Tools then appear as `mcp__telegram__tg_send_message`. Restart Claude Code
-after changing MCP config.
+- **Telegram-driven sessions** get it automatically: the supervisor spawns
+  `claude` with `--mcp-config '{"mcpServers":{"telegram":{"type":"http","url":"…"}}}'`
+  (built from `HOST`/`PORT`). It is *merged* with your other registered servers
+  — no `--strict-mcp-config` — so the session still has playwright etc.
+- **Manual sessions** never see telegram by default. To opt in explicitly, pass
+  the bundled config (it merges with your global servers):
+
+  ```bash
+  claude --mcp-config /home/claude/devbox/telegram-mcp/telegram.mcp.json
+  ```
+
+  Edit `telegram.mcp.json` if you changed `HOST`/`PORT`.
+
+Tools appear as `mcp__telegram__tg_send_message`. If you previously registered
+the server globally, remove it: `claude mcp remove telegram`.
+
+> Caveat: if you run a manual session with telegram enabled *while* a
+> Telegram-driven session is live, both compete for the same message queue.
+> Avoid overlapping the two.
