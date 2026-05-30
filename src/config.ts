@@ -22,6 +22,10 @@ export interface Config {
   host: string;
   /** File where the learned chat id is persisted. */
   chatIdFile: string;
+  /** File where the list of scheduled sessions is persisted. */
+  schedulesFile: string;
+  /** IANA timezone all schedule times are interpreted in (and told to agents). */
+  timezone: string;
   /** Spaces config, if credentials are available; else null (direct upload). */
   spaces: SpacesConfig | null;
   /** Telegram-driven Claude Code session settings. */
@@ -96,6 +100,9 @@ export function loadConfig(): Config {
     port: Number(process.env.PORT ?? 8765),
     host: process.env.HOST ?? "127.0.0.1",
     chatIdFile: process.env.CHAT_ID_FILE ?? "chat-id.json",
+    schedulesFile: process.env.SCHEDULES_FILE ?? "schedules.json",
+    // Hardcoded for now — all cron/once times are interpreted in this zone.
+    timezone: "Asia/Jerusalem",
     spaces: loadSpaces(),
     session: {
       claudeBin:

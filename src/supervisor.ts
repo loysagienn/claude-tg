@@ -2,17 +2,34 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createWriteStream } from "node:fs";
 
 /**
- * Owns the lifecycle of a single Telegram-driven Claude Code session.
+ * Owns the lifecycle of Telegram-driven Claude Code sessions, enforcing the
+ * invariant that **at most one** session is alive at a time (0 or 1).
  *
- * The telegram-mcp process is always running, so it can act as a supervisor:
- *  - First message (no live session)  → spawn a `claude` child with that text
- *    as the initial prompt. The child talks back through this same telegram MCP
- *    server (tg_send_message / tg_ask) and, between requests, blocks on
- *    tg_get_messages so the one process stays alive across the whole dialog.
- *  - Subsequent messages (session live) → handed to the MessageHub as usual; the
- *    running child picks them up via its pending tg_get_messages call.
- *  - `stop`                            → kill the child; the session dies.
+ * Requests to start a session come from two sources:
+ *  - a Telegram message that arrives while no session is active (origin
+ *    `telegram`) — these sessions live forever, until the user sends `stop`;
+ *  - a schedule firing (origin `schedule`) — these additionally die after
+ *    {@link SessionRequest.inactivityMs} of no interaction.
+ *
+ * Both go onto a FIFO {@link queue}. The pump starts the next queued request
+ * whenever no session is active; it runs on enqueue, on child exit, and at
+ * startup. Messages that arrive while a session IS active are not queued — the
+ * bot forwards them to the live session via the MessageHub. `stop` kills the
+ * active session only and leaves the queue untouched.
  */
+export interface SessionRequest {
+  /** Where the request came from. Decides forever-vs-timeout behaviour. */
+  origin: "telegram" | "schedule";
+  /** First instruction handed to the spawned session. */
+  prompt: string;
+  /** Source schedule id, for dedup and logging (schedule-origin only). */
+  scheduleId?: string;
+  /** Schedule name, used in the "starting" notification. */
+  name?: string;
+  /** Inactivity timeout in ms; if set, the session dies after this idle gap. */
+  inactivityMs?: number;
+}
+
 export interface SupervisorDeps {
   /** Path to the `claude` CLI binary. */
   claudeBin: string;
@@ -40,6 +57,8 @@ const SYSTEM_PROMPT = `You are running as a long-lived assistant driven entirely
 - mcp__telegram__tg_ask — ask a question and block for the answer (only when you genuinely need a decision mid-task).
 - mcp__telegram__tg_send_photo — send an image/screenshot.
 
+The user's timezone is Asia/Jerusalem. Interpret any time the user mentions, and report any time back to them, in that timezone.
+
 Reporting (CRITICAL — without this the user is blind and assumes you have hung):
 - Narrate EVERY meaningful action, not just the final result.
 - The moment you receive an instruction, send a short message confirming what you understood and what you're about to do.
@@ -60,10 +79,18 @@ Operating loop (critical):
 2. When done, send a final result message, then call mcp__telegram__tg_get_messages with waitSeconds: 3600 to wait for the next instruction.
 3. If it returns no message (timeout), call it again. Repeat forever — never end your turn on your own.
 
-A supervisor terminates your process when the user sends "stop", so you do not need to handle "stop" yourself. Just keep looping on tg_get_messages between tasks.`;
+A supervisor terminates your process when the user sends "stop", so you do not need to handle "stop" yourself. Just keep looping on tg_get_messages between tasks. (A scheduled session is additionally terminated after a period of no interaction — that is expected and not an error.)`;
 
 export class SessionSupervisor {
   private child: ChildProcess | null = null;
+  /** The request that spawned the live child, if any. */
+  private active: SessionRequest | null = null;
+  /** Pending session requests, started one at a time by the pump. */
+  private queue: SessionRequest[] = [];
+  /** Why we last killed the child, so the exit handler reports correctly. */
+  private killReason: "stop" | "timeout" | null = null;
+  /** Inactivity timer for a schedule-origin session; cleared on every exit. */
+  private inactivityTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly deps: SupervisorDeps) {}
 
@@ -83,8 +110,9 @@ export class SessionSupervisor {
       return true;
     }
 
+    // No live session → this message starts a new (forever) one via the queue.
     if (!this.child) {
-      this.start(text);
+      this.enqueue({ origin: "telegram", prompt: text });
       return true;
     }
 
@@ -92,11 +120,44 @@ export class SessionSupervisor {
     return false;
   }
 
-  /** Spawn a new `claude` session with `prompt` as its first instruction. */
-  private start(prompt: string): void {
+  /**
+   * Add a session request to the queue and try to start it. Schedule-origin
+   * requests are de-duplicated: if a session for the same schedule is already
+   * active or already queued, the request is dropped and `false` is returned.
+   */
+  enqueue(req: SessionRequest): boolean {
+    if (req.scheduleId) {
+      if (this.active?.scheduleId === req.scheduleId) return false;
+      if (this.queue.some((q) => q.scheduleId === req.scheduleId)) return false;
+    }
+    this.queue.push(req);
+    this.pump();
+    return true;
+  }
+
+  /**
+   * Register interaction with the live session, resetting its inactivity timer.
+   * Called for messages routed to the session and for outgoing messages it
+   * sends. No-op unless a schedule-origin session with a timeout is active.
+   */
+  noteActivity(): void {
+    if (this.child && this.active?.inactivityMs) this.armInactivity();
+  }
+
+  /** Start the next queued request if nothing is currently running. */
+  private pump(): void {
+    if (this.child) return;
+    const req = this.queue.shift();
+    if (req) this.start(req);
+  }
+
+  /** Spawn a new `claude` session for `req`. */
+  private start(req: SessionRequest): void {
     // A fresh session is the only consumer of the hub, so discard anything a
     // previous session left behind (stale waiters / queued messages).
     this.deps.resetHub();
+    this.active = req;
+    this.killReason = null;
 
     // Inject the telegram MCP server only into this child, rather than relying
     // on a global registration. Without --strict-mcp-config it merges with the
@@ -109,7 +170,7 @@ export class SessionSupervisor {
 
     const args = [
       "-p",
-      prompt,
+      req.prompt,
       "--append-system-prompt",
       SYSTEM_PROMPT,
       // Stream every event (tool calls, results, errors) as JSONL to stdout so
@@ -139,51 +200,113 @@ export class SessionSupervisor {
     this.child = child;
 
     const log = createWriteStream(this.deps.logFile, { flags: "a" });
-    log.write(`\n=== session ${child.pid} started ${new Date().toISOString()} ===\n`);
-    log.write(`prompt: ${prompt}\n`);
+    const tag = req.origin === "schedule" ? ` schedule=${req.scheduleId}` : "";
+    log.write(`\n=== session ${child.pid} started ${new Date().toISOString()} origin=${req.origin}${tag} ===\n`);
+    log.write(`prompt: ${req.prompt}\n`);
     child.stdout?.pipe(log, { end: false });
     child.stderr?.pipe(log, { end: false });
+
+    // Announce auto-started (scheduled) sessions so they don't appear out of
+    // nowhere; user-started ones need no announcement.
+    if (req.origin === "schedule") {
+      void this.deps
+        .notify(`🕘 Запускаю расписанную сессию: ${req.name ?? req.scheduleId}`)
+        .catch(() => {});
+    }
+
+    // Arm the inactivity timeout for schedule-origin sessions.
+    this.armInactivity();
 
     child.on("exit", (code, signal) => {
       log.write(`=== session ${child.pid} exited code=${code} signal=${signal} ===\n`);
       log.end();
+      const reason = this.killReason;
       // Only clear if this is still the current child (guard against races).
-      if (this.child === child) this.child = null;
-      // A natural exit (not a stop-kill) — let the user know the loop ended.
-      if (signal !== "SIGTERM" && signal !== "SIGKILL") {
-        // Distinguish a clean finish from a crash. A non-zero exit (e.g. an API
-        // 529 that exhausted its retries) otherwise dies silently mid-task and
-        // looks like a hang from Telegram, so surface the exit code and reason.
-        const msg =
-          code && code !== 0
-            ? `❌ Session crashed (exit code ${code}) — likely a transient API/tool error mid-task. Send a message to retry.`
-            : "⚠️ Session ended on its own. Send a message to start a new one.";
-        void this.deps.notify(msg).catch(() => {});
+      if (this.child === child) {
+        this.child = null;
+        this.active = null;
+        this.killReason = null;
+        this.clearInactivity();
       }
+      this.notifyExit(reason, code);
+      // A slot freed up — start whatever is next in the queue.
+      this.pump();
     });
 
     child.on("error", (err) => {
       log.write(`=== session spawn error: ${String(err)} ===\n`);
-      if (this.child === child) this.child = null;
+      if (this.child === child) {
+        this.child = null;
+        this.active = null;
+        this.killReason = null;
+        this.clearInactivity();
+      }
       void this.deps
         .notify(`❌ Failed to start session: ${err.message}`)
         .catch(() => {});
+      this.pump();
     });
+  }
+
+  /** Tell the user why the session ended, unless we already did (stop). */
+  private notifyExit(reason: "stop" | "timeout" | null, code: number | null): void {
+    if (reason === "stop") {
+      // stop() already sent "🛑 Session stopped."
+      return;
+    }
+    if (reason === "timeout") {
+      void this.deps
+        .notify("⏰ Сессия завершена (30 мин бездействия). Отправьте сообщение, чтобы начать новую.")
+        .catch(() => {});
+      return;
+    }
+    // Natural exit. Distinguish a clean finish from a crash: a non-zero exit
+    // (e.g. an API 529 that exhausted its retries) otherwise dies silently
+    // mid-task and looks like a hang from Telegram, so surface the exit code.
+    const msg =
+      code && code !== 0
+        ? `❌ Session crashed (exit code ${code}) — likely a transient API/tool error mid-task. Send a message to retry.`
+        : "⚠️ Session ended on its own. Send a message to start a new one.";
+    void this.deps.notify(msg).catch(() => {});
   }
 
   /** Kill the live session — its whole process group — if any. */
   async stop(): Promise<void> {
-    const child = this.child;
-    if (!child) {
+    if (!this.child) {
       await this.deps.notify("ℹ️ No active session to stop.");
       return;
     }
-    this.child = null;
-    const pid = child.pid;
+    this.killReason = "stop";
+    const pid = this.child.pid;
     this.killGroup(pid, "SIGTERM");
     // Escalate if the group doesn't die promptly.
     setTimeout(() => this.killGroup(pid, "SIGKILL"), 3000);
     await this.deps.notify("🛑 Session stopped.");
+  }
+
+  /**
+   * (Re)arm the inactivity timer for the active session. No-op unless the
+   * active request carries an `inactivityMs`. When it fires, the session's
+   * whole process group is killed (the exit handler then notifies the user).
+   */
+  private armInactivity(): void {
+    this.clearInactivity();
+    const ms = this.active?.inactivityMs;
+    if (!ms || !this.child) return;
+    this.inactivityTimer = setTimeout(() => {
+      const pid = this.child?.pid;
+      if (pid === undefined) return;
+      this.killReason = "timeout";
+      this.killGroup(pid, "SIGTERM");
+      setTimeout(() => this.killGroup(pid, "SIGKILL"), 3000);
+    }, ms);
+  }
+
+  private clearInactivity(): void {
+    if (this.inactivityTimer) {
+      clearTimeout(this.inactivityTimer);
+      this.inactivityTimer = null;
+    }
   }
 
   /**

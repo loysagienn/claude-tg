@@ -19,6 +19,7 @@
     "@aws-sdk/client-s3": "^3.1057.0",
     "@koa/router": "^15.5.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "croner": "^10.0.1",
     "grammy": "^1.43.0",
     "koa": "^3.2.1",
     "koa-bodyparser": "^4.4.1",

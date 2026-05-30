@@ -7,6 +7,8 @@ import { createMcpServer } from "./mcp.js";
 import { createHttpServer } from "./server.js";
 import { createUploader } from "./spaces.js";
 import { SessionSupervisor } from "./supervisor.js";
+import { ScheduleStore } from "./scheduleStore.js";
+import { Scheduler } from "./scheduler.js";
 
 const config = loadConfig();
 
@@ -24,6 +26,15 @@ const supervisor = new SessionSupervisor({
   notify: (text) => sendMessage(text),
   resetHub: () => hub.reset(),
 });
+
+const scheduleStore = new ScheduleStore(config.schedulesFile);
+scheduleStore.load();
+
+const scheduler = new Scheduler(scheduleStore, {
+  enqueue: (req) => supervisor.enqueue(req),
+  timezone: config.timezone,
+});
+scheduler.start();
 
 const bot = createBot(config, store, hub, supervisor);
 
@@ -73,6 +84,14 @@ const app = createHttpServer(() =>
     sendPhoto,
     waitForReply: (timeoutMs, signal) => hub.next(timeoutMs, signal),
     drainMessages: () => hub.drain(),
+    onActivity: () => supervisor.noteActivity(),
+    schedules: {
+      list: () => scheduler.list(),
+      create: (input) => scheduler.create(input),
+      update: (id, patch) => scheduler.update(id, patch),
+      remove: (id) => scheduler.remove(id),
+      runNow: (id) => scheduler.runNow(id),
+    },
   }),
 );
 

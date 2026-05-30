@@ -19,6 +19,11 @@ A single Node process that is both a Telegram bot (grammy) and an MCP server
 | `tg_send_photo` | Send a photo (local file path or http(s) URL) with an optional caption. Local files are re-hosted on Spaces first, then sent to Telegram by URL. |
 | `tg_ask` | Send a question (optionally with an image) and **block until the user replies** or the timeout elapses; returns the reply text. Ideal for captcha solving, confirmations, and decisions mid-task. |
 | `tg_get_messages` | Return queued incoming messages from the user; optionally long-poll (`waitSeconds`) for a new one. |
+| `tg_list_schedules` | List all scheduled sessions with id, name, schedule, next run time, and prompt. |
+| `tg_create_schedule` | Create a scheduled session: `kind: "cron"` (recurring) or `kind: "once"` (single run, self-deletes). |
+| `tg_update_schedule` | Update a schedule by id (omitted fields unchanged). |
+| `tg_delete_schedule` | Delete a schedule by id. |
+| `tg_run_schedule_now` | Queue a schedule to run immediately, bypassing its timer. |
 
 ### How incoming messages flow
 
@@ -31,8 +36,15 @@ notifications so clients don't time the request out.
 
 ## Telegram-driven sessions
 
-The process never exits, so it acts as a supervisor for a single `claude`
-session that you start and stop from Telegram:
+The process never exits, so it acts as a supervisor for `claude` sessions you
+start and stop from Telegram. **At most one session is alive at a time** (0 or
+1). Requests to start a session — a message that arrives while none is running,
+or a [schedule](#scheduled-sessions) firing — go onto a FIFO queue; a pump
+starts the next queued request whenever no session is active (on enqueue, on
+session exit, and at startup). Messages that arrive *while a session is live* are
+not queued — they are delivered to that session.
+
+The basic flow for a session you start by messaging the bot:
 
 - **First message** (no live session) → spawn a `claude` child with that text as
   the initial prompt (`-p`), an appended system prompt that tells it to talk
@@ -81,6 +93,47 @@ supervisor (systemd/pm2) if you need to survive that.
 > confirmation. Anyone who knows the passphrase and has the bot can drive them.
 > Keep the bot private and narrow `SESSION_ADD_DIR` if you don't need full access.
 
+### Scheduled sessions
+
+Besides messaging the bot, sessions can start **on a schedule** — e.g. "every
+morning, read the last 24h of Gmail and send me a digest". Schedules are defined
+in a JSON file (`SCHEDULES_FILE`, default `schedules.json`) read at startup, and
+managed at runtime through the `tg_*_schedule*` MCP tools, so a running session
+can create/edit/delete its own and others' schedules.
+
+When a schedule fires it enqueues a session with the schedule's `prompt` as the
+first instruction. Differences from a message-started session:
+
+- **Inactivity timeout.** A scheduled session is killed after **30 minutes with
+  no interaction** — interaction being a message you send it or a message it
+  sends you (`tg_send_message` / `tg_send_photo` / `tg_ask`). So it does its
+  task, reports, and stays available for follow-up for up to 30 min, then dies
+  on its own. (Message-started sessions have no timeout — they live until
+  `stop`.) `stop` kills whichever session is active, scheduled or not.
+- **Announced.** You get a `🕘 Запускаю расписанную сессию: <name>` notice when
+  it starts and a `⏰` notice when it dies on the inactivity timeout, so sessions
+  never appear or vanish unexplained.
+- **De-duplicated.** A schedule won't be queued again if a session for it is
+  already active or already waiting in the queue.
+
+Each schedule is `{ id, name, prompt, schedule }` where `schedule` is either:
+
+- `{ "kind": "cron", "expr": "0 9 * * *" }` — recurring, standard 5-field cron
+  (`min hour day-of-month month day-of-week`); or
+- `{ "kind": "once", "at": "2026-06-01T09:00:00" }` — a single run, **deleted
+  from the file after it fires**.
+
+All times are interpreted in **`Asia/Jerusalem`** (hardcoded for now; the agent
+is also told this timezone in its system prompt). Missed firings while the
+process was down are **not** caught up — a schedule simply runs at its next
+eligible time. Edits and one-shot deletions are written back to the file
+atomically. The runtime queue itself is in-memory and not persisted across
+restarts.
+
+> Scheduled sessions run with the same `--dangerously-skip-permissions` /
+> `--add-dir` access as message-started ones — and now start *without* an
+> explicit message from you, on a timer. Mind that when writing schedule prompts.
+
 ### Photo handling
 
 Photos given as a **local file path** (via `tg_send_photo` or `tg_ask`) are
@@ -103,6 +156,7 @@ Copy `.env.example` to `.env` and fill it in (loaded via Node's built-in
 | `PORT` | no | `8765` | MCP HTTP port. |
 | `HOST` | no | `127.0.0.1` | Keep on loopback; do not expose. |
 | `CHAT_ID_FILE` | no | `chat-id.json` | Where the learned chat id is stored. |
+| `SCHEDULES_FILE` | no | `schedules.json` | Where scheduled sessions are stored (read at startup). |
 | `CLAUDE_BIN` | no | `~/.local/bin/claude` | Path to the `claude` CLI used for spawned sessions. |
 | `SESSION_CWD` | no | `~/devbox` | Working directory the spawned session runs in. |
 | `SESSION_ADD_DIR` | no | `/` | Directory granted tool access (`/` = full filesystem). |

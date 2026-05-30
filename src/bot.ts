@@ -38,18 +38,25 @@ export function createBot(
     // Only accept messages from the registered chat; ignore strangers.
     if (String(ctx.chat.id) !== store.get()) return;
 
-    // The supervisor may start a new session (no session live) or stop one
-    // (`stop`). If it consumes the message, don't also queue it for the hub.
+    // The supervisor may start a new session (no session live → queued) or stop
+    // one (`stop`). If it consumes the message, don't also queue it for the hub.
     const consumed = await supervisor.handle(text);
     if (consumed) return;
 
+    // A session is live: this message is interaction with it (resets the
+    // inactivity timeout) and is delivered via the hub.
+    supervisor.noteActivity();
     hub.push({ id: ctx.message.message_id, date: ctx.message.date, text });
   });
 
   // A reply that is only a photo (with optional caption) still carries useful
-  // info — forward the caption (or a placeholder) so tg_ask can resolve.
+  // info — forward the caption (or a placeholder) so tg_ask can resolve. Only
+  // meaningful while a session is live (a fresh session would clear the hub),
+  // so ignore photos sent with no active session.
   bot.on("message:photo", async (ctx) => {
     if (String(ctx.chat.id) !== store.get()) return;
+    if (!supervisor.isActive()) return;
+    supervisor.noteActivity();
     hub.push({
       id: ctx.message.message_id,
       date: ctx.message.date,
