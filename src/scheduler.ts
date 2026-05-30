@@ -92,10 +92,14 @@ export class Scheduler {
   private arm(s: Schedule): void {
     this.disarm(s.id);
     const fire = () => this.fire(s.id);
+    // For `once`, pass the raw ISO string (not `new Date(...)`): croner then
+    // interprets a timezone-naive datetime in the job's `timezone`. `new Date()`
+    // would instead parse it in the *process* local zone (UTC on the server),
+    // silently shifting a "23:18 Jerusalem" reminder by the UTC offset.
     const job =
       s.schedule.kind === "once"
         ? new Cron(
-            new Date(s.schedule.at),
+            s.schedule.at,
             { timezone: this.deps.timezone, maxRuns: 1 },
             fire,
           )
