@@ -29,14 +29,22 @@ export interface SupervisorDeps {
 }
 
 /** Appended to the session's system prompt so it behaves as a TG-driven agent. */
-const SYSTEM_PROMPT = `You are running as a long-lived assistant driven entirely through Telegram. The human cannot see your stdout — your ONLY channel to them is the telegram MCP tools:
-- mcp__telegram__tg_send_message — send replies, progress, and results. Send one when you finish each request so the user gets feedback.
-- mcp__telegram__tg_ask — ask a question and block for the answer (use only when you genuinely need a decision mid-task).
+const SYSTEM_PROMPT = `You are running as a long-lived assistant driven entirely through Telegram. The human CANNOT see your stdout, your tool calls, or your thinking — your ONLY channel to them is the telegram MCP tools:
+- mcp__telegram__tg_send_message — send narration, progress updates, and results.
+- mcp__telegram__tg_ask — ask a question and block for the answer (only when you genuinely need a decision mid-task).
 - mcp__telegram__tg_send_photo — send an image/screenshot.
 
+Reporting (CRITICAL — without this the user is blind and assumes you have hung):
+- Narrate EVERY meaningful action, not just the final result.
+- The moment you receive an instruction, send a short message confirming what you understood and what you're about to do.
+- Before each step, send a one-line message naming the tool/command you're about to run and on what — e.g. "Opening example.com in the browser…", "Taking a screenshot…", "Uploading the screenshot…", "Running: npm test". Then report what came back.
+- If ANYTHING goes wrong — a tool error, an empty or unexpected result, a timeout, a non-zero exit — IMMEDIATELY send a message with what failed, the exact error text, and what you'll try next. Never fail or stall silently.
+- Treat every risky step defensively: if a call might throw or hang, report before and after it, so a hang is obvious from where the narration stops.
+- Err strongly on the side of over-communicating. A steady stream of short updates is exactly what the user wants — sending too much is fine, going quiet is not.
+
 Operating loop (critical):
-1. Handle the current instruction, reporting via tg_send_message.
-2. When done, call mcp__telegram__tg_get_messages with waitSeconds: 3600 to wait for the next instruction.
+1. Handle the current instruction, narrating via tg_send_message as above.
+2. When done, send a final result message, then call mcp__telegram__tg_get_messages with waitSeconds: 3600 to wait for the next instruction.
 3. If it returns no message (timeout), call it again. Repeat forever — never end your turn on your own.
 
 A supervisor terminates your process when the user sends "stop", so you do not need to handle "stop" yourself. Just keep looping on tg_get_messages between tasks.`;
@@ -87,6 +95,14 @@ export class SessionSupervisor {
       prompt,
       "--append-system-prompt",
       SYSTEM_PROMPT,
+      // Stream every event (tool calls, results, errors) as JSONL to stdout so
+      // the log file becomes a full trace of what the session did — otherwise
+      // the default text format only emits the final result and a hung or
+      // crashed session leaves no clue behind. --verbose is required to stream
+      // in -p mode. Nothing reads this stdout; it's piped straight to the log.
+      "--output-format",
+      "stream-json",
+      "--verbose",
       "--mcp-config",
       mcpConfig,
       "--add-dir",
@@ -107,6 +123,7 @@ export class SessionSupervisor {
 
     const log = createWriteStream(this.deps.logFile, { flags: "a" });
     log.write(`\n=== session ${child.pid} started ${new Date().toISOString()} ===\n`);
+    log.write(`prompt: ${prompt}\n`);
     child.stdout?.pipe(log, { end: false });
     child.stderr?.pipe(log, { end: false });
 

@@ -38,7 +38,10 @@ session that you start and stop from Telegram:
   the initial prompt (`-p`), an appended system prompt that tells it to talk
   only through the telegram MCP tools, `--add-dir <SESSION_ADD_DIR>`, and
   `--dangerously-skip-permissions`. The child connects back to this MCP server,
-  so its `tg_send_message` / `tg_ask` / `tg_send_photo` calls reach you.
+  so its `tg_send_message` / `tg_ask` / `tg_send_photo` calls reach you. The
+  appended system prompt also tells the session to **narrate every meaningful
+  step** (not just the final result) and to report any error — with its text —
+  the moment it happens, so a stall or failure is visible from Telegram alone.
 - **Subsequent messages** (session live) → delivered to the running child via
   its pending `tg_get_messages` call. The system prompt instructs the session
   to loop on `tg_get_messages(waitSeconds: 3600)` between tasks, so one process
@@ -47,7 +50,23 @@ session that you start and stop from Telegram:
   SIGKILL after 3s). Send any message afterwards to start a fresh session.
 
 If the child exits on its own, you get a Telegram notice and the next message
-starts a new session. The child's stdout/stderr is appended to `SESSION_LOG_FILE`.
+starts a new session.
+
+### Debugging a session
+
+The child is spawned with `--output-format stream-json --verbose`, so its
+`SESSION_LOG_FILE` (default `session.log`) is a full JSONL trace of the session:
+every tool call, tool result, assistant message, and error. This is the place to
+look when a session goes quiet — the default text output would only emit the
+final result, leaving a hung or killed session with nothing logged. Each run is
+delimited by `=== session <pid> started … ===` / `… exited code=… signal=… ===`
+lines, with the initial `prompt:` recorded right after the start line. Tail it
+live with `tail -f session.log`; pipe a run through `jq` to read it.
+
+On top of the log, the MCP tools forward failures to you over Telegram: if a
+`tg_send_photo` / `tg_ask` / `tg_get_messages` call throws (bad path, Spaces or
+Telegram API error, …) the bot sends you a `❌ <tool> failed: <reason>` notice
+and returns the error to the session so it can react rather than stall silently.
 
 The session is spawned as the leader of its own process group, and the
 supervisor SIGKILLs that whole group (claude **and** anything it spawned) when

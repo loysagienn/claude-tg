@@ -67,6 +67,39 @@ function formatMessages(msgs: IncomingMessage[]): string {
     .join("\n");
 }
 
+/** MCP tool result shape for the two states a handler can return. */
+type ToolResult = {
+  content: { type: "text"; text: string }[];
+  isError?: boolean;
+};
+
+/**
+ * Report a tool failure on both channels: push a notice to the user over
+ * Telegram (best-effort — swallowed if that very channel is what broke) so an
+ * error never goes unseen, and return an MCP error result so the session also
+ * knows the call failed and can react / narrate it.
+ *
+ * `notifyUser` is false only for tg_send_message itself, where re-sending over
+ * the broken channel would just fail again.
+ */
+async function toolFailure(
+  deps: ToolDeps,
+  where: string,
+  err: unknown,
+  notifyUser = true,
+): Promise<ToolResult> {
+  const detail = err instanceof Error ? err.message : String(err);
+  const text = `❌ ${where} failed: ${detail}`;
+  if (notifyUser) {
+    try {
+      await deps.sendMessage(text);
+    } catch {
+      // The Telegram channel itself is down — nothing more we can do here.
+    }
+  }
+  return { content: [{ type: "text", text }], isError: true };
+}
+
 /**
  * Build a fresh MCP server with the Telegram tools registered.
  *
@@ -87,8 +120,13 @@ export function createMcpServer(deps: ToolDeps): McpServer {
       },
     },
     async ({ text }) => {
-      await deps.sendMessage(text);
-      return { content: [{ type: "text", text: "Message sent." }] };
+      try {
+        await deps.sendMessage(text);
+        return { content: [{ type: "text", text: "Message sent." }] };
+      } catch (err) {
+        // Can't report over Telegram — that's the channel that just failed.
+        return toolFailure(deps, "tg_send_message", err, false);
+      }
     },
   );
 
@@ -108,8 +146,12 @@ export function createMcpServer(deps: ToolDeps): McpServer {
       },
     },
     async ({ photo, caption }) => {
-      await deps.sendPhoto(photo, caption);
-      return { content: [{ type: "text", text: "Photo sent." }] };
+      try {
+        await deps.sendPhoto(photo, caption);
+        return { content: [{ type: "text", text: "Photo sent." }] };
+      } catch (err) {
+        return toolFailure(deps, "tg_send_photo", err);
+      }
     },
   );
 
@@ -144,25 +186,29 @@ export function createMcpServer(deps: ToolDeps): McpServer {
       },
     },
     async ({ question, photo, timeoutSeconds }, extra) => {
-      if (photo) await deps.sendPhoto(photo, question);
-      else await deps.sendMessage(question);
+      try {
+        if (photo) await deps.sendPhoto(photo, question);
+        else await deps.sendMessage(question);
 
-      const seconds = timeoutSeconds ?? DEFAULT_ASK_TIMEOUT;
-      const reply = await waitWithHeartbeat(extra, seconds * 1000, () =>
-        deps.waitForReply(seconds * 1000),
-      );
+        const seconds = timeoutSeconds ?? DEFAULT_ASK_TIMEOUT;
+        const reply = await waitWithHeartbeat(extra, seconds * 1000, () =>
+          deps.waitForReply(seconds * 1000),
+        );
 
-      if (!reply) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `No reply received within ${seconds}s.`,
-            },
-          ],
-        };
+        if (!reply) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `No reply received within ${seconds}s.`,
+              },
+            ],
+          };
+        }
+        return { content: [{ type: "text", text: reply.text }] };
+      } catch (err) {
+        return toolFailure(deps, "tg_ask", err);
       }
-      return { content: [{ type: "text", text: reply.text }] };
     },
   );
 
@@ -188,19 +234,23 @@ export function createMcpServer(deps: ToolDeps): McpServer {
       },
     },
     async ({ waitSeconds }, extra) => {
-      let msgs = deps.drainMessages();
+      try {
+        let msgs = deps.drainMessages();
 
-      if (msgs.length === 0 && waitSeconds && waitSeconds > 0) {
-        const m = await waitWithHeartbeat(extra, waitSeconds * 1000, () =>
-          deps.waitForReply(waitSeconds * 1000),
-        );
-        if (m) msgs = [m];
-      }
+        if (msgs.length === 0 && waitSeconds && waitSeconds > 0) {
+          const m = await waitWithHeartbeat(extra, waitSeconds * 1000, () =>
+            deps.waitForReply(waitSeconds * 1000),
+          );
+          if (m) msgs = [m];
+        }
 
-      if (msgs.length === 0) {
-        return { content: [{ type: "text", text: "(no messages)" }] };
+        if (msgs.length === 0) {
+          return { content: [{ type: "text", text: "(no messages)" }] };
+        }
+        return { content: [{ type: "text", text: formatMessages(msgs) }] };
+      } catch (err) {
+        return toolFailure(deps, "tg_get_messages", err);
       }
-      return { content: [{ type: "text", text: formatMessages(msgs) }] };
     },
   );
 
