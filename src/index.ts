@@ -22,6 +22,7 @@ const supervisor = new SessionSupervisor({
   logFile: config.session.logFile,
   mcpUrl: `http://${config.host}:${config.port}/mcp`,
   notify: (text) => sendMessage(text),
+  resetHub: () => hub.reset(),
 });
 
 const bot = createBot(config, store, hub, supervisor);
@@ -70,7 +71,7 @@ const app = createHttpServer(() =>
   createMcpServer({
     sendMessage,
     sendPhoto,
-    waitForReply: (timeoutMs) => hub.next(timeoutMs),
+    waitForReply: (timeoutMs, signal) => hub.next(timeoutMs, signal),
     drainMessages: () => hub.drain(),
   }),
 );

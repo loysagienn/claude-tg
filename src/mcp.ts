@@ -7,8 +7,15 @@ export interface ToolDeps {
   sendMessage: (text: string) => Promise<void>;
   /** Send a photo (local file path or http(s) URL) with an optional caption. */
   sendPhoto: (photo: string, caption?: string) => Promise<void>;
-  /** Resolve with the next incoming message, or null after timeoutMs. */
-  waitForReply: (timeoutMs: number) => Promise<IncomingMessage | null>;
+  /**
+   * Resolve with the next incoming message, or null after timeoutMs. The
+   * AbortSignal (from the MCP request) lets the wait be torn down if the client
+   * disconnects, so no zombie waiter is left behind.
+   */
+  waitForReply: (
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ) => Promise<IncomingMessage | null>;
   /** Return and clear all queued incoming messages without waiting. */
   drainMessages: () => IncomingMessage[];
 }
@@ -18,6 +25,8 @@ const DEFAULT_ASK_TIMEOUT = 120;
 /** Minimal shape of the per-request extra we rely on for progress heartbeats. */
 type RequestExtra = {
   _meta?: { progressToken?: string | number };
+  /** Aborts when the underlying MCP request/connection is cancelled. */
+  signal?: AbortSignal;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the SDK's
   // ServerNotification union is bivariant-unfriendly; we only ever pass a valid
   // progress notification below.
@@ -192,7 +201,7 @@ export function createMcpServer(deps: ToolDeps): McpServer {
 
         const seconds = timeoutSeconds ?? DEFAULT_ASK_TIMEOUT;
         const reply = await waitWithHeartbeat(extra, seconds * 1000, () =>
-          deps.waitForReply(seconds * 1000),
+          deps.waitForReply(seconds * 1000, extra?.signal),
         );
 
         if (!reply) {
@@ -239,7 +248,7 @@ export function createMcpServer(deps: ToolDeps): McpServer {
 
         if (msgs.length === 0 && waitSeconds && waitSeconds > 0) {
           const m = await waitWithHeartbeat(extra, waitSeconds * 1000, () =>
-            deps.waitForReply(waitSeconds * 1000),
+            deps.waitForReply(waitSeconds * 1000, extra?.signal),
           );
           if (m) msgs = [m];
         }
