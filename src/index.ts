@@ -1,6 +1,7 @@
-import { InputFile } from "grammy";
+import { InputFile, InlineKeyboard } from "grammy";
 import { loadConfig } from "./config.js";
 import { ChatStore } from "./chatStore.js";
+import { ButtonStore } from "./buttonStore.js";
 import { MessageHub } from "./messageHub.js";
 import { createBot } from "./bot.js";
 import { createMcpServer } from "./mcp.js";
@@ -14,6 +15,9 @@ const config = loadConfig();
 
 const store = new ChatStore(config.chatIdFile);
 store.load();
+
+const buttonStore = new ButtonStore(config.buttonIdFile);
+buttonStore.load();
 
 const hub = new MessageHub();
 
@@ -36,8 +40,6 @@ const scheduler = new Scheduler(scheduleStore, {
 });
 scheduler.start();
 
-const bot = createBot(config, store, hub, supervisor);
-
 const uploader = config.spaces ? createUploader(config.spaces) : null;
 if (!uploader) {
   console.warn(
@@ -55,11 +57,47 @@ const requireChat = (): string => {
   return chatId;
 };
 
-const sendMessage = async (text: string): Promise<void> => {
-  await bot.api.sendMessage(requireChat(), text);
+// Single-button inline keyboard attached to narration messages (tg_send_message
+// / tg_send_photo). Clicking it stops the live session — handled in the bot's
+// callback handler. The callback_data is what that handler matches on.
+const okKeyboard = new InlineKeyboard().text("OK", "stop_session");
+
+// Remove the inline button from the message that currently carries it, if any.
+// Called before sending any new message and on every incoming message / button
+// click, so at most one (the latest) narration message ever shows the button.
+const clearButton = async (): Promise<void> => {
+  const messageId = buttonStore.get();
+  if (messageId === null) return;
+  // Drop the tracked id first so a failed/duplicate edit can't loop or re-edit.
+  buttonStore.clear();
+  const chatId = store.get();
+  if (!chatId) return;
+  try {
+    await bot.api.editMessageReplyMarkup(chatId, messageId);
+  } catch {
+    // The message is gone or already has no markup — nothing to do.
+  }
 };
 
-const sendPhoto = async (photo: string, caption?: string): Promise<void> => {
+const sendMessage = async (
+  text: string,
+  opts: { withButton?: boolean } = {},
+): Promise<void> => {
+  // Always strip any prior button before sending the next message.
+  await clearButton();
+  const message = await bot.api.sendMessage(
+    requireChat(),
+    text,
+    opts.withButton ? { reply_markup: okKeyboard } : {},
+  );
+  if (opts.withButton) buttonStore.set(message.message_id);
+};
+
+const sendPhoto = async (
+  photo: string,
+  caption?: string,
+  opts: { withButton?: boolean } = {},
+): Promise<void> => {
   const isUrl = /^https?:\/\//i.test(photo);
 
   // Rule: local files are re-hosted on Spaces first, then sent to Telegram by
@@ -75,8 +113,15 @@ const sendPhoto = async (photo: string, caption?: string): Promise<void> => {
     media = new InputFile(photo);
   }
 
-  await bot.api.sendPhoto(requireChat(), media, caption ? { caption } : {});
+  await clearButton();
+  const message = await bot.api.sendPhoto(requireChat(), media, {
+    ...(caption ? { caption } : {}),
+    ...(opts.withButton ? { reply_markup: okKeyboard } : {}),
+  });
+  if (opts.withButton) buttonStore.set(message.message_id);
 };
+
+const bot = createBot(config, store, hub, supervisor, clearButton);
 
 const app = createHttpServer(() =>
   createMcpServer({

@@ -22,6 +22,8 @@ export interface Config {
   host: string;
   /** File where the learned chat id is persisted. */
   chatIdFile: string;
+  /** File where the id of the message currently bearing the OK button lives. */
+  buttonIdFile: string;
   /** File where the list of scheduled sessions is persisted. */
   schedulesFile: string;
   /** IANA timezone all schedule times are interpreted in (and told to agents). */
@@ -100,6 +102,7 @@ export function loadConfig(): Config {
     port: Number(process.env.PORT ?? 8765),
     host: process.env.HOST ?? "127.0.0.1",
     chatIdFile: process.env.CHAT_ID_FILE ?? "chat-id.json",
+    buttonIdFile: process.env.BUTTON_ID_FILE ?? "button-id.json",
     schedulesFile: process.env.SCHEDULES_FILE ?? "schedules.json",
     // Hardcoded for now — all cron/once times are interpreted in this zone.
     timezone: "Asia/Jerusalem",

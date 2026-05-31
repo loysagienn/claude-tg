@@ -277,10 +277,15 @@ export class SessionSupervisor {
     void this.deps.notify(msg).catch(() => {});
   }
 
-  /** Kill the live session — its whole process group — if any. */
-  async stop(): Promise<void> {
+  /**
+   * Kill the live session — its whole process group — if any. `silent` (used by
+   * the "OK" button) suppresses both the "🛑 Session stopped." notice and the
+   * "no active session" notice; the exit handler stays quiet either way because
+   * the kill reason is "stop".
+   */
+  async stop(opts: { silent?: boolean } = {}): Promise<void> {
     if (!this.child) {
-      await this.deps.notify("ℹ️ No active session to stop.");
+      if (!opts.silent) await this.deps.notify("ℹ️ No active session to stop.");
       return;
     }
     this.killReason = "stop";
@@ -288,7 +293,7 @@ export class SessionSupervisor {
     this.killGroup(pid, "SIGTERM");
     // Escalate if the group doesn't die promptly.
     setTimeout(() => this.killGroup(pid, "SIGKILL"), 3000);
-    await this.deps.notify("🛑 Session stopped.");
+    if (!opts.silent) await this.deps.notify("🛑 Session stopped.");
   }
 
   /**

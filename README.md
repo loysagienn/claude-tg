@@ -25,6 +25,17 @@ A single Node process that is both a Telegram bot (grammy) and an MCP server
 | `tg_delete_schedule` | Delete a schedule by id. |
 | `tg_run_schedule_now` | Queue a schedule to run immediately, bypassing its timer. |
 
+### The "OK" stop button
+
+Every `tg_send_message` and `tg_send_photo` is sent with a single inline button
+labelled **OK**, and the id of that message is remembered in `BUTTON_ID_FILE`.
+The button is a stop affordance: tapping it kills the live session **silently**
+(no "🛑 Session stopped." notice) and then removes the button. Only the latest
+narration message carries the button — it is stripped from the previous one
+before every outgoing message and on every incoming message, so there is at most
+one live button at a time. `tg_ask` prompts and status notices are sent without
+a button.
+
 ### How incoming messages flow
 
 Every message from the registered chat is first offered to the session
@@ -156,6 +167,7 @@ Copy `.env.example` to `.env` and fill it in (loaded via Node's built-in
 | `PORT` | no | `8765` | MCP HTTP port. |
 | `HOST` | no | `127.0.0.1` | Keep on loopback; do not expose. |
 | `CHAT_ID_FILE` | no | `chat-id.json` | Where the learned chat id is stored. |
+| `BUTTON_ID_FILE` | no | `button-id.json` | Where the id of the message bearing the "OK" button is stored. |
 | `SCHEDULES_FILE` | no | `schedules.json` | Where scheduled sessions are stored (read at startup). |
 | `CLAUDE_BIN` | no | `~/.local/bin/claude` | Path to the `claude` CLI used for spawned sessions. |
 | `SESSION_CWD` | no | `~/devbox` | Working directory the spawned session runs in. |

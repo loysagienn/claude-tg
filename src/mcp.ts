@@ -18,10 +18,24 @@ export interface ScheduleApi {
 }
 
 export interface ToolDeps {
-  /** Send a text message to the configured user. */
-  sendMessage: (text: string) => Promise<void>;
-  /** Send a photo (local file path or http(s) URL) with an optional caption. */
-  sendPhoto: (photo: string, caption?: string) => Promise<void>;
+  /**
+   * Send a text message to the configured user. `withButton` attaches the
+   * inline "OK" (stop-session) button — set only for tg_send_message, not for
+   * status notices or tg_ask prompts.
+   */
+  sendMessage: (
+    text: string,
+    opts?: { withButton?: boolean },
+  ) => Promise<void>;
+  /**
+   * Send a photo (local file path or http(s) URL) with an optional caption.
+   * `withButton` attaches the inline "OK" button — set only for tg_send_photo.
+   */
+  sendPhoto: (
+    photo: string,
+    caption?: string,
+    opts?: { withButton?: boolean },
+  ) => Promise<void>;
   /**
    * Resolve with the next incoming message, or null after timeoutMs. The
    * AbortSignal (from the MCP request) lets the wait be torn down if the client
@@ -153,7 +167,7 @@ export function createMcpServer(deps: ToolDeps): McpServer {
     },
     async ({ text }) => {
       try {
-        await deps.sendMessage(text);
+        await deps.sendMessage(text, { withButton: true });
         deps.onActivity();
         return { content: [{ type: "text", text: "Message sent." }] };
       } catch (err) {
@@ -180,7 +194,7 @@ export function createMcpServer(deps: ToolDeps): McpServer {
     },
     async ({ photo, caption }) => {
       try {
-        await deps.sendPhoto(photo, caption);
+        await deps.sendPhoto(photo, caption, { withButton: true });
         deps.onActivity();
         return { content: [{ type: "text", text: "Photo sent." }] };
       } catch (err) {

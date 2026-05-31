@@ -4,5 +4,6 @@ dist/
 .env
 tg-config.json
 chat-id.json
+button-id.json
 schedules.json
 schedules.json.tmp
