@@ -27,6 +27,7 @@ const supervisor = new SessionSupervisor({
   addDir: config.session.addDir,
   logFile: config.session.logFile,
   mcpUrl: `http://${config.host}:${config.port}/mcp`,
+  timezone: config.timezone,
   notify: (text) => sendMessage(text),
   resetHub: () => hub.reset(),
 });

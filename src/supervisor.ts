@@ -41,6 +41,12 @@ export interface SupervisorDeps {
   logFile: string;
   /** URL of this telegram MCP endpoint, injected into the spawned session. */
   mcpUrl: string;
+  /**
+   * IANA timezone the session runs in (set as TZ in its env). Must match the
+   * zone the scheduler interprets `at`/cron times in, so the agent's own clock
+   * (`date`, `Date.now()`) agrees with how the schedule it creates will fire.
+   */
+  timezone: string;
   /** Send a status line back to the user over Telegram. */
   notify: (text: string) => Promise<void>;
   /**
@@ -197,7 +203,10 @@ export class SessionSupervisor {
 
     const child = spawn(this.deps.claudeBin, args, {
       cwd: this.deps.cwd,
-      env: process.env,
+      // Pin the child's clock to the configured zone so its `date`/`Date` agree
+      // with how croner interprets the `at`/cron times it sets — otherwise it
+      // reads UTC, labels it as Asia/Jerusalem, and schedules hours off.
+      env: { ...process.env, TZ: this.deps.timezone },
       stdio: ["ignore", "pipe", "pipe"],
       // Lead its own process group (gpid === pid) so we can signal the whole
       // group — claude plus anything it spawns — via a negative pid. Lets us
