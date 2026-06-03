@@ -210,17 +210,20 @@ export function createMcpServer(deps: ToolDeps): McpServer {
       description:
         "Send a question to the user via Telegram and BLOCK until they reply " +
         "(or the timeout elapses), then return their reply text. Optionally " +
-        "attach an image (local path or URL) — e.g. a screenshot of a captcha " +
-        "you need solved. Use this whenever you need input, a decision, or a " +
-        "confirmation from the user mid-task.",
+        "attach an image (local path or URL) for context — e.g. a screenshot " +
+        "of the current page. Use this whenever you need input, a decision, or " +
+        "a confirmation from the user mid-task. For a captcha or any " +
+        "human-verification challenge, do NOT ask the user for the answer — " +
+        "ask them to connect via noVNC (https://novnc.loysagienn.com/vnc.html) " +
+        "and solve it in the browser themselves, then wait for their reply.",
       inputSchema: {
         question: z.string().min(1).describe("The question / prompt to send"),
         photo: z
           .string()
           .optional()
           .describe(
-            "Optional image to attach: local file path or http(s) URL " +
-              "(e.g. a captcha screenshot)",
+            "Optional image to attach for context: local file path or " +
+              "http(s) URL (e.g. a screenshot of the current page)",
           ),
         timeoutSeconds: z
           .number()
