@@ -23,6 +23,7 @@ const hub = new MessageHub();
 
 const supervisor = new SessionSupervisor({
   claudeBin: config.session.claudeBin,
+  model: config.session.model,
   cwd: config.session.cwd,
   addDir: config.session.addDir,
   logFile: config.session.logFile,

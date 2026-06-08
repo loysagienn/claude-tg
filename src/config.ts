@@ -38,6 +38,8 @@ export interface Config {
 export interface SessionConfig {
   /** Path to the `claude` CLI binary. */
   claudeBin: string;
+  /** Model the spawned session runs on (passed as `--model`). */
+  model: string;
   /** Working directory the session runs in. */
   cwd: string;
   /** Extra directory granted tool access ("/" = full access). */
@@ -110,6 +112,9 @@ export function loadConfig(): Config {
     session: {
       claudeBin:
         process.env.CLAUDE_BIN ?? join(homedir(), ".local", "bin", "claude"),
+      // Pin a model so bot sessions don't drift with the global `claude`
+      // default; override via SESSION_MODEL if needed.
+      model: process.env.SESSION_MODEL ?? "claude-opus-4-8",
       cwd: process.env.SESSION_CWD ?? join(homedir(), "devbox"),
       addDir: process.env.SESSION_ADD_DIR ?? "/",
       logFile:

@@ -170,6 +170,7 @@ Copy `.env.example` to `.env` and fill it in (loaded via Node's built-in
 | `BUTTON_ID_FILE` | no | `button-id.json` | Where the id of the message bearing the "OK" button is stored. |
 | `SCHEDULES_FILE` | no | `schedules.json` | Where scheduled sessions are stored (read at startup). |
 | `CLAUDE_BIN` | no | `~/.local/bin/claude` | Path to the `claude` CLI used for spawned sessions. |
+| `SESSION_MODEL` | no | `claude-opus-4-8` | Model the spawned session runs on (passed as `--model`). |
 | `SESSION_CWD` | no | `~/devbox` | Working directory the spawned session runs in. |
 | `SESSION_ADD_DIR` | no | `/` | Directory granted tool access (`/` = full filesystem). |
 | `SESSION_LOG_FILE` | no | `~/devbox/telegram-mcp/session.log` | Where the session's stdout/stderr is appended. |
