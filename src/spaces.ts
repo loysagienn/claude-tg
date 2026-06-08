@@ -1,7 +1,13 @@
 import { readFileSync } from "node:fs";
 import { basename, extname } from "node:path";
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import type { SpacesConfig } from "./config.js";
+
+// Presigned URL lifetime. Telegram fetches the photo within seconds of the
+// sendPhoto call and then stores its own copy, so a short window is plenty
+// while keeping the object unreachable afterwards.
+const PRESIGN_EXPIRES_SECONDS = 600;
 
 const CONTENT_TYPES: Record<string, string> = {
   ".png": "image/png",
@@ -21,12 +27,14 @@ export type Uploader = (localPath: string) => Promise<string>;
 
 /**
  * Build an uploader bound to a DigitalOcean Spaces bucket. The returned
- * function uploads a local file with a public-read ACL and resolves to its
- * public URL.
+ * function uploads a local file with a PRIVATE ACL and resolves to a short-lived
+ * presigned GET URL. The object is not publicly readable; only the holder of the
+ * signed URL can fetch it, and the signature expires after
+ * PRESIGN_EXPIRES_SECONDS. Telegram downloads the photo immediately and keeps
+ * its own copy, so the link does not need to stay valid.
  *
  * The SDK endpoint is the *regional* base (e.g. https://ams3.digitaloceanspaces.com)
- * with virtual-hosted addressing, so the bucket becomes a subdomain — matching
- * the public URL in `config.publicBase`.
+ * with virtual-hosted addressing, so the bucket becomes a subdomain.
  */
 export function createUploader(config: SpacesConfig): Uploader {
   const client = new S3Client({
@@ -45,10 +53,14 @@ export function createUploader(config: SpacesConfig): Uploader {
         Bucket: config.bucket,
         Key: key,
         Body: readFileSync(localPath),
-        ACL: "public-read",
+        ACL: "private",
         ContentType: contentType(localPath),
       }),
     );
-    return `${config.publicBase}/${key}`;
+    return await getSignedUrl(
+      client,
+      new GetObjectCommand({ Bucket: config.bucket, Key: key }),
+      { expiresIn: PRESIGN_EXPIRES_SECONDS },
+    );
   };
 }
