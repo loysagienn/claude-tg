@@ -33,6 +33,8 @@ export interface SessionRequest {
 export interface SupervisorDeps {
   /** Path to the `claude` CLI binary. */
   claudeBin: string;
+  /** Model the session runs on, passed as `--model`. */
+  model: string;
   /** Working directory the session runs in. */
   cwd: string;
   /** Extra directory to grant tool access to (e.g. "/" for full access). */
@@ -189,6 +191,10 @@ export class SessionSupervisor {
     const args = [
       "-p",
       req.prompt,
+      // Pin the model explicitly so sessions don't drift with the global
+      // `claude` default between runs.
+      "--model",
+      this.deps.model,
       "--append-system-prompt",
       SYSTEM_PROMPT,
       // Stream every event (tool calls, results, errors) as JSONL to stdout so
