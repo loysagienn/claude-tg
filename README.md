@@ -1,4 +1,4 @@
-# telegram-mcp
+# claude-tg
 
 A single Node process that is both a Telegram bot (grammy) and an MCP server
 (Koa, streamable HTTP). It plays two roles:
@@ -173,7 +173,7 @@ Copy `.env.example` to `.env` and fill it in (loaded via Node's built-in
 | `SESSION_MODEL` | no | `claude-opus-4-8` | Model the spawned session runs on (passed as `--model`). |
 | `SESSION_CWD` | no | `~/devbox` | Working directory the spawned session runs in. |
 | `SESSION_ADD_DIR` | no | `/` | Directory granted tool access (`/` = full filesystem). |
-| `SESSION_LOG_FILE` | no | `~/devbox/telegram-mcp/session.log` | Where the session's stdout/stderr is appended. |
+| `SESSION_LOG_FILE` | no | `~/devbox/claude-tg/session.log` | Where the session's stdout/stderr is appended. |
 
 Spaces credentials (`SPACES_*`) are also read here or from `~/.claude/spaces.env`;
 see `.env.example`.
@@ -211,7 +211,7 @@ it's wanted:
   the bundled config (it merges with your global servers):
 
   ```bash
-  claude --mcp-config /home/claude/devbox/telegram-mcp/telegram.mcp.json
+  claude --mcp-config /home/claude/devbox/claude-tg/telegram.mcp.json
   ```
 
   Edit `telegram.mcp.json` if you changed `HOST`/`PORT`.

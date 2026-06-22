@@ -144,7 +144,7 @@ const app = createHttpServer(() =>
 
 app.listen(config.port, config.host, () => {
   console.log(
-    `telegram-mcp listening on http://${config.host}:${config.port}/mcp`,
+    `claude-tg listening on http://${config.host}:${config.port}/mcp`,
   );
 });
 

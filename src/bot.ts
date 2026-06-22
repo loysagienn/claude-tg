@@ -29,7 +29,7 @@ export function createBot(
   const bot = new Bot(config.token);
 
   bot.command("start", async (ctx) => {
-    await ctx.reply("👋 telegram-mcp is running.");
+    await ctx.reply("👋 claude-tg is running.");
   });
 
   bot.on("message:text", async (ctx) => {

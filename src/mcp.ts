@@ -154,7 +154,7 @@ async function toolFailure(
  * over (bot api + message hub) are process-wide singletons.
  */
 export function createMcpServer(deps: ToolDeps): McpServer {
-  const server = new McpServer({ name: "telegram-mcp", version: "0.2.0" });
+  const server = new McpServer({ name: "claude-tg", version: "0.2.0" });
 
   server.registerTool(
     "tg_send_message",

@@ -118,7 +118,7 @@ export function loadConfig(): Config {
       cwd: process.env.SESSION_CWD ?? join(homedir(), "devbox"),
       addDir: process.env.SESSION_ADD_DIR ?? "/",
       logFile:
-        process.env.SESSION_LOG_FILE ?? join(homedir(), "devbox", "telegram-mcp", "session.log"),
+        process.env.SESSION_LOG_FILE ?? join(homedir(), "devbox", "claude-tg", "session.log"),
     },
   };
 }
