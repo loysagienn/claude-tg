@@ -123,12 +123,33 @@ const sendPhoto = async (
   if (opts.withButton) buttonStore.set(message.message_id);
 };
 
+const sendDocument = async (
+  file: string,
+  caption?: string,
+  opts: { withButton?: boolean } = {},
+): Promise<void> => {
+  const isUrl = /^https?:\/\//i.test(file);
+
+  // Unlike photos, documents are NOT re-hosted on Spaces: a direct multipart
+  // upload (up to 50 MB) preserves the original filename, which is the point
+  // of sending a file. Remote URLs pass through for Telegram to fetch.
+  const media = isUrl ? file : new InputFile(file);
+
+  await clearButton();
+  const message = await bot.api.sendDocument(requireChat(), media, {
+    ...(caption ? { caption } : {}),
+    ...(opts.withButton ? { reply_markup: okKeyboard } : {}),
+  });
+  if (opts.withButton) buttonStore.set(message.message_id);
+};
+
 const bot = createBot(config, store, hub, supervisor, clearButton);
 
 const app = createHttpServer(() =>
   createMcpServer({
     sendMessage,
     sendPhoto,
+    sendDocument,
     waitForReply: (timeoutMs, signal) => hub.next(timeoutMs, signal),
     drainMessages: () => hub.drain(),
     onActivity: () => supervisor.noteActivity(),
