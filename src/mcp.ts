@@ -37,6 +37,16 @@ export interface ToolDeps {
     opts?: { withButton?: boolean },
   ) => Promise<void>;
   /**
+   * Send a file/document (local file path or http(s) URL) with an optional
+   * caption. `withButton` attaches the inline "OK" button — set only for
+   * tg_send_document.
+   */
+  sendDocument: (
+    file: string,
+    caption?: string,
+    opts?: { withButton?: boolean },
+  ) => Promise<void>;
+  /**
    * Resolve with the next incoming message, or null after timeoutMs. The
    * AbortSignal (from the MCP request) lets the wait be torn down if the client
    * disconnects, so no zombie waiter is left behind.
@@ -199,6 +209,35 @@ export function createMcpServer(deps: ToolDeps): McpServer {
         return { content: [{ type: "text", text: "Photo sent." }] };
       } catch (err) {
         return toolFailure(deps, "tg_send_photo", err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "tg_send_document",
+    {
+      title: "Send Telegram file",
+      description:
+        "Send a file (document) to the configured user via Telegram. Accepts " +
+        "a local file path or an http(s) URL, with an optional caption. Use " +
+        "for any non-photo file — PDF, archive, CSV, code, logs — or for an " +
+        "image that must arrive uncompressed with its original filename. " +
+        "Local files upload directly (Telegram's 50 MB bot limit applies).",
+      inputSchema: {
+        file: z
+          .string()
+          .min(1)
+          .describe("Local file path or http(s) URL of the file to send"),
+        caption: z.string().optional().describe("Optional caption text"),
+      },
+    },
+    async ({ file, caption }) => {
+      try {
+        await deps.sendDocument(file, caption, { withButton: true });
+        deps.onActivity();
+        return { content: [{ type: "text", text: "File sent." }] };
+      } catch (err) {
+        return toolFailure(deps, "tg_send_document", err);
       }
     },
   );

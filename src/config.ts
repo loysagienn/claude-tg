@@ -26,6 +26,8 @@ export interface Config {
   buttonIdFile: string;
   /** File where the list of scheduled sessions is persisted. */
   schedulesFile: string;
+  /** Directory incoming media (photos/files the user sends) is saved into. */
+  downloadDir: string;
   /** IANA timezone all schedule times are interpreted in (and told to agents). */
   timezone: string;
   /** Spaces config, if credentials are available; else null (direct upload). */
@@ -106,6 +108,10 @@ export function loadConfig(): Config {
     chatIdFile: process.env.CHAT_ID_FILE ?? "chat-id.json",
     buttonIdFile: process.env.BUTTON_ID_FILE ?? "button-id.json",
     schedulesFile: process.env.SCHEDULES_FILE ?? "schedules.json",
+    // Incoming media is transient — keep it in ~/artifacts (disposable, may be
+    // auto-cleaned) rather than in a project directory.
+    downloadDir:
+      process.env.DOWNLOAD_DIR ?? join(homedir(), "artifacts", "claude-tg"),
     // Hardcoded for now — all cron/once times are interpreted in this zone.
     timezone: "Asia/Jerusalem",
     spaces: loadSpaces(),
