@@ -40,6 +40,8 @@ export interface Config {
 export interface SessionConfig {
   /** Path to the `claude` CLI binary. */
   claudeBin: string;
+  /** Path to the `codex` CLI binary (sessions started via /agent → codex). */
+  codexBin: string;
   /** Model the spawned session runs on (passed as `--model`). */
   model: string;
   /** Working directory the session runs in. */
@@ -118,9 +120,13 @@ export function loadConfig(): Config {
     session: {
       claudeBin:
         process.env.CLAUDE_BIN ?? join(homedir(), ".local", "bin", "claude"),
+      // Symlinked next to claude (target lives under nvm and moves with node
+      // versions; the symlink is the stable path).
+      codexBin:
+        process.env.CODEX_BIN ?? join(homedir(), ".local", "bin", "codex"),
       // Pin a model so bot sessions don't drift with the global `claude`
       // default; override via SESSION_MODEL if needed.
-      model: process.env.SESSION_MODEL ?? "claude-opus-4-8",
+      model: process.env.SESSION_MODEL ?? "claude-fable-5",
       cwd: process.env.SESSION_CWD ?? join(homedir(), "devbox"),
       addDir: process.env.SESSION_ADD_DIR ?? "/",
       logFile:

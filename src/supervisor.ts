@@ -17,9 +17,15 @@ import { createWriteStream } from "node:fs";
  * bot forwards them to the live session via the MessageHub. `stop` kills the
  * active session only and leaves the queue untouched.
  */
+/** Which CLI agent a session runs on. Everything defaults to "claude"; "codex"
+ * sessions can only be started explicitly via the /agent bot command. */
+export type AgentKind = "claude" | "codex";
+
 export interface SessionRequest {
   /** Where the request came from. Decides forever-vs-timeout behaviour. */
   origin: "telegram" | "schedule";
+  /** CLI agent to spawn. Defaults to "claude" when omitted. */
+  agent?: AgentKind;
   /** First instruction handed to the spawned session. */
   prompt: string;
   /** Source schedule id, for dedup and logging (schedule-origin only). */
@@ -33,6 +39,8 @@ export interface SessionRequest {
 export interface SupervisorDeps {
   /** Path to the `claude` CLI binary. */
   claudeBin: string;
+  /** Path to the `codex` CLI binary. */
+  codexBin: string;
   /** Model the session runs on, passed as `--model`. */
   model: string;
   /** Working directory the session runs in. */
@@ -59,12 +67,20 @@ export interface SupervisorDeps {
   resetHub: () => void;
 }
 
-/** Appended to the session's system prompt so it behaves as a TG-driven agent. */
-const SYSTEM_PROMPT = `You are running as a long-lived assistant driven entirely through Telegram. The human CANNOT see your stdout, your tool calls, or your thinking — your ONLY channel to them is the telegram MCP tools:
-- mcp__telegram__tg_send_message — send narration, progress updates, and results.
-- mcp__telegram__tg_ask — ask a question and block for the answer (only when you genuinely need a decision mid-task).
-- mcp__telegram__tg_send_photo — send an image/screenshot.
-- mcp__telegram__tg_send_document — send a file (PDF, archive, CSV, code, logs, or an uncompressed image) by local path or URL.
+/**
+ * Instructions that make a spawned session behave as a TG-driven agent.
+ * Appended to the system prompt for claude (`--append-system-prompt`); codex
+ * has no such flag, so there they are prepended to the initial prompt instead.
+ * Tool naming differs per agent: claude exposes MCP tools as
+ * `mcp__telegram__<tool>`, codex as `<tool>` from the server "telegram".
+ */
+const buildSystemPrompt = (agent: AgentKind): string => {
+  const p = agent === "claude" ? "mcp__telegram__" : "";
+  return `You are running as a long-lived assistant driven entirely through Telegram. The human CANNOT see your stdout, your tool calls, or your thinking — your ONLY channel to them is the tools of the "telegram" MCP server:
+- ${p}tg_send_message — send narration, progress updates, and results.
+- ${p}tg_ask — ask a question and block for the answer (only when you genuinely need a decision mid-task).
+- ${p}tg_send_photo — send an image/screenshot.
+- ${p}tg_send_document — send a file (PDF, archive, CSV, code, logs, or an uncompressed image) by local path or URL.
 
 Incoming media: when the user sends a photo or a file, it is downloaded for you and the message you receive contains the saved path — "[photo saved: /path/to/img.jpg] <caption>" or "[file saved: /path/to/doc.pdf] <caption>". Read/process the file at that path directly with your normal tools (you have filesystem access). If it instead says saving failed, report the error to the user via tg_send_message.
 
@@ -84,7 +100,11 @@ Truthfulness (CRITICAL — the human CANNOT see your tools, so every word you se
 - When something fails, quote the tool's literal error text verbatim (in quotes), do not paraphrase it into a tidier story. The raw text is what lets the human check you.
 - Separate observation from inference. State a result as fact only if you saw it. Mark any guess about WHY something happened as a guess ("предположительно…", "возможно…") — never present an inferred cause as an observed one.
 - "I could not do X — the tool returned: «<literal error>»" is a COMPLETE and CORRECT answer. An honest failure IS success here. Do NOT invent a plausible-sounding result or cause just to have something to deliver.
-- If a tool call returns "No such tool available", you guessed the name — do NOT invent its output. Re-run ToolSearch (including \`select:<exact_tool_name>\` to load the schema) to find the real tool, then retry. If you still can't find a working tool after searching, say exactly that.
+${
+  agent === "claude"
+    ? `- If a tool call returns "No such tool available", you guessed the name — do NOT invent its output. Re-run ToolSearch (including \`select:<exact_tool_name>\` to load the schema) to find the real tool, then retry. If you still can't find a working tool after searching, say exactly that.`
+    : `- If a tool call fails because no such tool exists, you guessed the name — do NOT invent its output. Check the exact tool names available to you and retry; if you still can't find a working tool, say exactly that.`
+}
 
 Captcha & human-verification challenges (CRITICAL):
 - NEVER attempt to solve a captcha, reCAPTCHA, hCaptcha, "I'm not a robot" checkbox, image/slider puzzle, or any other human-verification challenge yourself. Do not click through it, do not type or guess an answer, and do not ask the user to read the answer back to you.
@@ -99,10 +119,11 @@ Scheduling (you can act in the future, not only now):
 
 Operating loop (critical):
 1. Handle the current instruction, narrating via tg_send_message as above.
-2. When done, send a final result message, then call mcp__telegram__tg_get_messages with waitSeconds: 3600 to wait for the next instruction.
+2. When done, send a final result message, then call ${p}tg_get_messages with waitSeconds: 3600 to wait for the next instruction.
 3. If it returns no message (timeout), call it again. Repeat forever — never end your turn on your own.
 
 A supervisor terminates your process when the user sends "stop", so you do not need to handle "stop" yourself. Just keep looping on tg_get_messages between tasks. (A scheduled session is additionally terminated after a period of no interaction — that is expected and not an error.)`;
+};
 
 export class SessionSupervisor {
   private child: ChildProcess | null = null;
@@ -182,40 +203,10 @@ export class SessionSupervisor {
     this.active = req;
     this.killReason = null;
 
-    // Inject the telegram MCP server only into this child, rather than relying
-    // on a global registration. Without --strict-mcp-config it merges with the
-    // user's other registered servers (so the session still has playwright
-    // etc.), while manual `claude` sessions never see telegram unless the user
-    // passes this config themselves.
-    const mcpConfig = JSON.stringify({
-      mcpServers: { telegram: { type: "http", url: this.deps.mcpUrl } },
-    });
+    const agent: AgentKind = req.agent ?? "claude";
+    const { bin, args } = this.buildSpawn(agent, req.prompt);
 
-    const args = [
-      "-p",
-      req.prompt,
-      // Pin the model explicitly so sessions don't drift with the global
-      // `claude` default between runs.
-      "--model",
-      this.deps.model,
-      "--append-system-prompt",
-      SYSTEM_PROMPT,
-      // Stream every event (tool calls, results, errors) as JSONL to stdout so
-      // the log file becomes a full trace of what the session did — otherwise
-      // the default text format only emits the final result and a hung or
-      // crashed session leaves no clue behind. --verbose is required to stream
-      // in -p mode. Nothing reads this stdout; it's piped straight to the log.
-      "--output-format",
-      "stream-json",
-      "--verbose",
-      "--mcp-config",
-      mcpConfig,
-      "--add-dir",
-      this.deps.addDir,
-      "--dangerously-skip-permissions",
-    ];
-
-    const child = spawn(this.deps.claudeBin, args, {
+    const child = spawn(bin, args, {
       cwd: this.deps.cwd,
       // Pin the child's clock to the configured zone so its `date`/`Date` agree
       // with how croner interprets the `at`/cron times it sets — otherwise it
@@ -231,7 +222,7 @@ export class SessionSupervisor {
 
     const log = createWriteStream(this.deps.logFile, { flags: "a" });
     const tag = req.origin === "schedule" ? ` schedule=${req.scheduleId}` : "";
-    log.write(`\n=== session ${child.pid} started ${new Date().toISOString()} origin=${req.origin}${tag} ===\n`);
+    log.write(`\n=== session ${child.pid} started ${new Date().toISOString()} origin=${req.origin} agent=${agent}${tag} ===\n`);
     log.write(`prompt: ${req.prompt}\n`);
     child.stdout?.pipe(log, { end: false });
     child.stderr?.pipe(log, { end: false });
@@ -276,6 +267,74 @@ export class SessionSupervisor {
         .catch(() => {});
       this.pump();
     });
+  }
+
+  /**
+   * Build the binary + argv for a session of the given agent.
+   *
+   * Both agents get the telegram MCP server injected per-spawn (never a global
+   * registration — a manual session with telegram tools would steal incoming
+   * messages from the live one, see README) and stream a full JSONL trace of
+   * every tool call/result to stdout, which start() pipes into the log file.
+   *
+   * claude: telegram merges with the user's other registered MCP servers (no
+   * --strict-mcp-config), the TG-agent instructions ride in via
+   * --append-system-prompt, and --verbose is required to stream in -p mode.
+   *
+   * codex: has no --append-system-prompt, so the same instructions are
+   * prepended to the initial prompt; the MCP server is injected with a -c
+   * config override, with tool_timeout_sec raised above the 3600s
+   * tg_get_messages long-poll so the idle loop isn't killed client-side.
+   * --dangerously-bypass-approvals-and-sandbox mirrors claude's
+   * --dangerously-skip-permissions (full access, mind SESSION_ADD_DIR does not
+   * apply); --skip-git-repo-check because the session cwd is not a repo.
+   */
+  private buildSpawn(
+    agent: AgentKind,
+    prompt: string,
+  ): { bin: string; args: string[] } {
+    if (agent === "codex") {
+      return {
+        bin: this.deps.codexBin,
+        args: [
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--cd",
+          this.deps.cwd,
+          "-c",
+          // JSON string quoting is valid TOML basic-string quoting.
+          `mcp_servers.telegram.url=${JSON.stringify(this.deps.mcpUrl)}`,
+          "-c",
+          "mcp_servers.telegram.tool_timeout_sec=3700",
+          `${buildSystemPrompt("codex")}\n\n---\n\nThe user's instruction:\n${prompt}`,
+        ],
+      };
+    }
+    return {
+      bin: this.deps.claudeBin,
+      args: [
+        "-p",
+        prompt,
+        // Pin the model explicitly so sessions don't drift with the global
+        // `claude` default between runs.
+        "--model",
+        this.deps.model,
+        "--append-system-prompt",
+        buildSystemPrompt("claude"),
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--mcp-config",
+        JSON.stringify({
+          mcpServers: { telegram: { type: "http", url: this.deps.mcpUrl } },
+        }),
+        "--add-dir",
+        this.deps.addDir,
+        "--dangerously-skip-permissions",
+      ],
+    };
   }
 
   /** Tell the user why the session ended, unless we already did (stop). */
