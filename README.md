@@ -26,6 +26,23 @@ A single Node process that is both a Telegram bot (grammy) and an MCP server
 | `tg_delete_schedule` | Delete a schedule by id. |
 | `tg_run_schedule_now` | Queue a schedule to run immediately, bypassing its timer. |
 
+### Message formatting
+
+User-facing text and captions accept a deliberately limited, agent-friendly
+Markdown subset: bold, italic, strikethrough, inline/fenced code, links,
+blockquotes, headings, and simple ordered or unordered lists. Raw HTML, tables,
+Markdown images, task lists, and deeply nested structures are not part of the
+contract. The exact rules are included in the MCP tool descriptions, while the
+spawned-agent system prompt contains only the cross-cutting requirement to use
+that documented format.
+
+The server converts Markdown to a whitelist of Telegram HTML, escapes all raw
+HTML from the agent, and sends with `parse_mode: "HTML"`. It also splits output
+without breaking tags or entities: regular messages use Telegram's 4096-character
+limit and captions use the 1024-character limit. Caption overflow is sent as
+one or more immediately following text messages. The inline **OK** button is
+attached only to the final emitted message.
+
 ### The "OK" stop button
 
 Every `tg_send_message` and `tg_send_photo` is sent with a single inline button
