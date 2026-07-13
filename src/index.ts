@@ -10,6 +10,11 @@ import { createUploader } from "./spaces.js";
 import { SessionSupervisor } from "./supervisor.js";
 import { ScheduleStore } from "./scheduleStore.js";
 import { Scheduler } from "./scheduler.js";
+import {
+  formatTelegramMarkdown,
+  TELEGRAM_CAPTION_LIMIT,
+  TELEGRAM_MESSAGE_LIMIT,
+} from "./telegramFormat.js";
 
 const config = loadConfig();
 
@@ -88,12 +93,16 @@ const sendMessage = async (
 ): Promise<void> => {
   // Always strip any prior button before sending the next message.
   await clearButton();
-  const message = await bot.api.sendMessage(
-    requireChat(),
-    text,
-    opts.withButton ? { reply_markup: okKeyboard } : {},
-  );
-  if (opts.withButton) buttonStore.set(message.message_id);
+  const chunks = formatTelegramMarkdown(text, TELEGRAM_MESSAGE_LIMIT);
+  if (chunks.length === 0) throw new Error("message is empty after formatting");
+  for (const [index, chunk] of chunks.entries()) {
+    const isLast = index === chunks.length - 1;
+    const message = await bot.api.sendMessage(requireChat(), chunk, {
+      parse_mode: "HTML",
+      ...(opts.withButton && isLast ? { reply_markup: okKeyboard } : {}),
+    });
+    if (opts.withButton && isLast) buttonStore.set(message.message_id);
+  }
 };
 
 const sendPhoto = async (
@@ -116,12 +125,29 @@ const sendPhoto = async (
     media = new InputFile(photo);
   }
 
+  const captionChunks = caption
+    ? formatTelegramMarkdown(caption, TELEGRAM_CAPTION_LIMIT)
+    : [];
+  const [firstCaption, ...overflow] = captionChunks;
+
   await clearButton();
   const message = await bot.api.sendPhoto(requireChat(), media, {
-    ...(caption ? { caption } : {}),
-    ...(opts.withButton ? { reply_markup: okKeyboard } : {}),
+    ...(firstCaption ? { caption: firstCaption, parse_mode: "HTML" as const } : {}),
+    ...(opts.withButton && overflow.length === 0
+      ? { reply_markup: okKeyboard }
+      : {}),
   });
-  if (opts.withButton) buttonStore.set(message.message_id);
+  if (opts.withButton && overflow.length === 0) {
+    buttonStore.set(message.message_id);
+  }
+  for (const [index, chunk] of overflow.entries()) {
+    const isLast = index === overflow.length - 1;
+    const sent = await bot.api.sendMessage(requireChat(), chunk, {
+      parse_mode: "HTML",
+      ...(opts.withButton && isLast ? { reply_markup: okKeyboard } : {}),
+    });
+    if (opts.withButton && isLast) buttonStore.set(sent.message_id);
+  }
 };
 
 const sendDocument = async (
@@ -136,12 +162,29 @@ const sendDocument = async (
   // of sending a file. Remote URLs pass through for Telegram to fetch.
   const media = isUrl ? file : new InputFile(file);
 
+  const captionChunks = caption
+    ? formatTelegramMarkdown(caption, TELEGRAM_CAPTION_LIMIT)
+    : [];
+  const [firstCaption, ...overflow] = captionChunks;
+
   await clearButton();
   const message = await bot.api.sendDocument(requireChat(), media, {
-    ...(caption ? { caption } : {}),
-    ...(opts.withButton ? { reply_markup: okKeyboard } : {}),
+    ...(firstCaption ? { caption: firstCaption, parse_mode: "HTML" as const } : {}),
+    ...(opts.withButton && overflow.length === 0
+      ? { reply_markup: okKeyboard }
+      : {}),
   });
-  if (opts.withButton) buttonStore.set(message.message_id);
+  if (opts.withButton && overflow.length === 0) {
+    buttonStore.set(message.message_id);
+  }
+  for (const [index, chunk] of overflow.entries()) {
+    const isLast = index === overflow.length - 1;
+    const sent = await bot.api.sendMessage(requireChat(), chunk, {
+      parse_mode: "HTML",
+      ...(opts.withButton && isLast ? { reply_markup: okKeyboard } : {}),
+    });
+    if (opts.withButton && isLast) buttonStore.set(sent.message_id);
+  }
 };
 
 const bot = createBot(config, store, hub, supervisor, clearButton);

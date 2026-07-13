@@ -7,6 +7,7 @@ import type {
   SchedulePatch,
 } from "./scheduleStore.js";
 import type { ScheduleView } from "./scheduler.js";
+import { TELEGRAM_MARKDOWN_GUIDE } from "./telegramFormat.js";
 
 /** Manage the persisted list of scheduled sessions (backed by the Scheduler). */
 export interface ScheduleApi {
@@ -170,9 +171,14 @@ export function createMcpServer(deps: ToolDeps): McpServer {
     "tg_send_message",
     {
       title: "Send Telegram message",
-      description: "Send a text message to the configured user via Telegram.",
+      description:
+        "Send a Markdown-formatted text message to the configured user via " +
+        `Telegram. ${TELEGRAM_MARKDOWN_GUIDE}`,
       inputSchema: {
-        text: z.string().min(1).describe("The message text to send"),
+        text: z
+          .string()
+          .min(1)
+          .describe("Message text using the supported Markdown subset"),
       },
     },
     async ({ text }) => {
@@ -193,13 +199,17 @@ export function createMcpServer(deps: ToolDeps): McpServer {
       title: "Send Telegram photo",
       description:
         "Send a photo to the configured user via Telegram. Accepts a local " +
-        "file path or an http(s) URL, with an optional caption.",
+        "file path or an http(s) URL, with an optional Markdown caption. " +
+        TELEGRAM_MARKDOWN_GUIDE,
       inputSchema: {
         photo: z
           .string()
           .min(1)
           .describe("Local file path or http(s) URL of the image"),
-        caption: z.string().optional().describe("Optional caption text"),
+        caption: z
+          .string()
+          .optional()
+          .describe("Optional caption using the supported Markdown subset"),
       },
     },
     async ({ photo, caption }) => {
@@ -222,13 +232,17 @@ export function createMcpServer(deps: ToolDeps): McpServer {
         "a local file path or an http(s) URL, with an optional caption. Use " +
         "for any non-photo file — PDF, archive, CSV, code, logs — or for an " +
         "image that must arrive uncompressed with its original filename. " +
-        "Local files upload directly (Telegram's 50 MB bot limit applies).",
+        "Local files upload directly (Telegram's 50 MB bot limit applies). " +
+        TELEGRAM_MARKDOWN_GUIDE,
       inputSchema: {
         file: z
           .string()
           .min(1)
           .describe("Local file path or http(s) URL of the file to send"),
-        caption: z.string().optional().describe("Optional caption text"),
+        caption: z
+          .string()
+          .optional()
+          .describe("Optional caption using the supported Markdown subset"),
       },
     },
     async ({ file, caption }) => {

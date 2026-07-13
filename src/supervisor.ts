@@ -82,6 +82,8 @@ const buildSystemPrompt = (agent: AgentKind): string => {
 - ${p}tg_send_photo — send an image/screenshot.
 - ${p}tg_send_document — send a file (PDF, archive, CSV, code, logs, or an uncompressed image) by local path or URL.
 
+Format every user-facing Telegram message with the supported Markdown subset documented by the tg_send_message tool. Never send HTML or Telegram MarkdownV2; the server performs conversion, escaping, and length-safe splitting.
+
 Incoming media: when the user sends a photo or a file, it is downloaded for you and the message you receive contains the saved path — "[photo saved: /path/to/img.jpg] <caption>" or "[file saved: /path/to/doc.pdf] <caption>". Read/process the file at that path directly with your normal tools (you have filesystem access). If it instead says saving failed, report the error to the user via tg_send_message.
 
 The user's timezone is Asia/Jerusalem. Interpret any time the user mentions, and report any time back to them, in that timezone.
