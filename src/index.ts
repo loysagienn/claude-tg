@@ -23,6 +23,7 @@ const hub = new MessageHub();
 
 const supervisor = new SessionSupervisor({
   claudeBin: config.session.claudeBin,
+  codexBin: config.session.codexBin,
   model: config.session.model,
   cwd: config.session.cwd,
   addDir: config.session.addDir,
@@ -177,6 +178,13 @@ app.listen(config.port, config.host, () => {
 process.on("exit", () => supervisor.shutdownSync());
 process.on("SIGINT", () => process.exit(130));
 process.on("SIGTERM", () => process.exit(143));
+
+// Populate Telegram's command menu (best-effort; the handlers work regardless).
+void bot.api
+  .setMyCommands([
+    { command: "agent", description: "Выбрать агента (claude/codex) и запустить сессию" },
+  ])
+  .catch((err) => console.warn("setMyCommands failed:", err));
 
 bot
   .start({

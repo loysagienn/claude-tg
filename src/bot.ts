@@ -1,9 +1,19 @@
-import { Bot, type Context } from "grammy";
+import { Bot, InlineKeyboard, type Context } from "grammy";
 import type { Config } from "./config.js";
 import type { ChatStore } from "./chatStore.js";
 import type { MessageHub } from "./messageHub.js";
-import type { SessionSupervisor } from "./supervisor.js";
+import type { AgentKind, SessionSupervisor } from "./supervisor.js";
 import { downloadTelegramFile } from "./download.js";
+
+/**
+ * Initial instruction for a session started via the /agent buttons: unlike a
+ * message-started session there is no user text yet, so the agent just greets
+ * and drops into the normal wait-for-messages loop.
+ */
+const AGENT_START_PROMPT =
+  "Пользователь запустил эту сессию вручную командой /agent, выбрав тебя как агента. " +
+  "Конкретной задачи пока нет. Отправь короткое приветствие через tg_send_message " +
+  "(одна строка: какой ты агент и что готов к работе) и жди инструкций через tg_get_messages.";
 
 /**
  * Create the grammy bot with its update handlers:
@@ -35,6 +45,17 @@ export function createBot(
 
   bot.command("start", async (ctx) => {
     await ctx.reply("👋 claude-tg is running.");
+  });
+
+  // /agent → pick which CLI agent to start a session with. The only way to
+  // start a codex session; plain messages keep starting claude ones.
+  bot.command("agent", async (ctx) => {
+    if (String(ctx.chat.id) !== store.get()) return;
+    await ctx.reply("Каким агентом запустить сессию?", {
+      reply_markup: new InlineKeyboard()
+        .text("claude", "agent:claude")
+        .text("codex", "agent:codex"),
+    });
   });
 
   bot.on("message:text", async (ctx) => {
@@ -114,20 +135,49 @@ export function createBot(
     await handleMedia(ctx, "file", doc.file_id, doc.file_name);
   });
 
-  // A tap on the inline "OK" button stops the live session. Per spec this path
-  // is silent — no "session stopped" notice — and the button is removed after.
+  // Inline button taps:
+  //  - "OK" (stop_session) → stop the live session. Per spec this path is
+  //    silent — no "session stopped" notice — and the button is removed after.
+  //  - "claude"/"codex" (agent:<kind>, from /agent) → start a session of that
+  //    agent, editing the picker message so the choice can't be re-used.
   bot.on("callback_query:data", async (ctx) => {
+    const data = ctx.callbackQuery.data;
     // Always answer to clear the client's loading spinner.
-    if (
-      ctx.callbackQuery.data !== "stop_session" ||
-      String(ctx.chat?.id) !== store.get()
-    ) {
+    if (String(ctx.chat?.id) !== store.get()) {
       await ctx.answerCallbackQuery();
       return;
     }
+
+    if (data === "stop_session") {
+      await ctx.answerCallbackQuery();
+      await supervisor.stop({ silent: true });
+      await clearButton();
+      return;
+    }
+
+    if (data === "agent:claude" || data === "agent:codex") {
+      const agent: AgentKind = data === "agent:codex" ? "codex" : "claude";
+      // Mirror the message flow: a live session owns the dialog, so don't
+      // queue a second one behind it — that would fire unexpectedly later.
+      if (supervisor.isActive()) {
+        await ctx.answerCallbackQuery({
+          text: "Сессия уже активна — сначала останови её (stop).",
+          show_alert: true,
+        });
+        return;
+      }
+      await ctx.answerCallbackQuery();
+      // Replace the picker so the buttons disappear and the choice is visible.
+      await ctx.editMessageText(`🚀 Запускаю сессию агента ${agent}…`);
+      supervisor.enqueue({
+        origin: "telegram",
+        agent,
+        prompt: AGENT_START_PROMPT,
+      });
+      return;
+    }
+
     await ctx.answerCallbackQuery();
-    await supervisor.stop({ silent: true });
-    await clearButton();
   });
 
   bot.catch((err) => {

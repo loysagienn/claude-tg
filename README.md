@@ -86,6 +86,30 @@ The basic flow for a session you start by messaging the bot:
 If the child exits on its own, you get a Telegram notice and the next message
 starts a new session.
 
+### Choosing the agent: /agent (claude or codex)
+
+By default every session runs the `claude` CLI. The bot command **`/agent`**
+replies with two inline buttons — **claude** and **codex** — and tapping one
+starts a fresh session of that agent (with a generic "greet and wait for
+instructions" first prompt). This is the **only** way to start a codex session;
+plain messages always start claude.
+
+- If a session is already live, the tap is rejected with an alert (send `stop`
+  first) — mirroring how plain messages never queue behind a live session.
+- The picker message is edited into "🚀 Запускаю сессию агента …" after the
+  choice, so the buttons can't be re-used.
+- A codex session is spawned as `codex exec --json
+  --dangerously-bypass-approvals-and-sandbox` with the telegram MCP server
+  injected per-spawn via `-c mcp_servers.telegram.url=…` (same
+  no-global-registration rule as claude, see below) and
+  `tool_timeout_sec=3700` so the 3600s `tg_get_messages` idle loop isn't
+  killed client-side. Codex has no `--append-system-prompt`, so the TG-agent
+  instructions are prepended to the initial prompt instead. Everything else —
+  the message flow, `stop`, the OK button, the JSONL session log — works the
+  same.
+- Codex auth lives in `~/.codex` (ChatGPT OAuth via `codex login`); the binary
+  is symlinked at `~/.local/bin/codex` (override with `CODEX_BIN`).
+
 ### Debugging a session
 
 The child is spawned with `--output-format stream-json --verbose`, so its
@@ -186,7 +210,8 @@ Copy `.env.example` to `.env` and fill it in (loaded via Node's built-in
 | `SCHEDULES_FILE` | no | `schedules.json` | Where scheduled sessions are stored (read at startup). |
 | `DOWNLOAD_DIR` | no | `~/artifacts/claude-tg` | Where incoming photos/files from the user are saved. |
 | `CLAUDE_BIN` | no | `~/.local/bin/claude` | Path to the `claude` CLI used for spawned sessions. |
-| `SESSION_MODEL` | no | `claude-opus-4-8` | Model the spawned session runs on (passed as `--model`). |
+| `CODEX_BIN` | no | `~/.local/bin/codex` | Path to the `codex` CLI used for `/agent` → codex sessions. |
+| `SESSION_MODEL` | no | `claude-fable-5` | Model the spawned session runs on (passed as `--model`). |
 | `SESSION_CWD` | no | `~/devbox` | Working directory the spawned session runs in. |
 | `SESSION_ADD_DIR` | no | `/` | Directory granted tool access (`/` = full filesystem). |
 | `SESSION_LOG_FILE` | no | `~/devbox/claude-tg/session.log` | Where the session's stdout/stderr is appended. |
