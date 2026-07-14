@@ -7,14 +7,14 @@ import { createWriteStream } from "node:fs";
  *
  * Requests to start a session come from two sources:
  *  - a Telegram message that arrives while no session is active (origin
- *    `telegram`) — these sessions live forever, until the user sends `stop`;
+ *    `telegram`) — these sessions live forever, until the user sends `/stop`;
  *  - a schedule firing (origin `schedule`) — these additionally die after
  *    {@link SessionRequest.inactivityMs} of no interaction.
  *
  * Both go onto a FIFO {@link queue}. The pump starts the next queued request
  * whenever no session is active; it runs on enqueue, on child exit, and at
  * startup. Messages that arrive while a session IS active are not queued — the
- * bot forwards them to the live session via the MessageHub. `stop` kills the
+ * bot forwards them to the live session via the MessageHub. `/stop` kills the
  * active session only and leaves the queue untouched.
  */
 /** Which CLI agent a session runs on. Everything defaults to "claude"; "codex"
@@ -124,7 +124,7 @@ Operating loop (critical):
 2. When done, send a final result message, then call ${p}tg_get_messages with waitSeconds: 3600 to wait for the next instruction.
 3. If it returns no message (timeout), call it again. Repeat forever — never end your turn on your own.
 
-A supervisor terminates your process when the user sends "stop", so you do not need to handle "stop" yourself. Just keep looping on tg_get_messages between tasks. (A scheduled session is additionally terminated after a period of no interaction — that is expected and not an error.)`;
+A supervisor terminates your process when the user sends "/stop", so you do not need to handle it yourself. Just keep looping on tg_get_messages between tasks. (A scheduled session is additionally terminated after a period of no interaction — that is expected and not an error.)`;
 };
 
 export class SessionSupervisor {
@@ -151,7 +151,7 @@ export class SessionSupervisor {
    * hub); false if it should be forwarded to the hub for the live session.
    */
   async handle(text: string): Promise<boolean> {
-    if (text.trim().toLowerCase() === "stop") {
+    if (text.trim().toLowerCase() === "/stop") {
       await this.stop();
       return true;
     }
@@ -362,14 +362,12 @@ export class SessionSupervisor {
   }
 
   /**
-   * Kill the live session — its whole process group — if any. `silent` (used by
-   * the "OK" button) suppresses both the "🛑 Session stopped." notice and the
-   * "no active session" notice; the exit handler stays quiet either way because
-   * the kill reason is "stop".
+   * Kill the live session — its whole process group — if any. The exit handler
+   * stays quiet because the kill reason is "stop"; the notice is sent here.
    */
-  async stop(opts: { silent?: boolean } = {}): Promise<void> {
+  async stop(): Promise<void> {
     if (!this.child) {
-      if (!opts.silent) await this.deps.notify("ℹ️ No active session to stop.");
+      await this.deps.notify("ℹ️ No active session to stop.");
       return;
     }
     this.killReason = "stop";
@@ -377,7 +375,7 @@ export class SessionSupervisor {
     this.killGroup(pid, "SIGTERM");
     // Escalate if the group doesn't die promptly.
     setTimeout(() => this.killGroup(pid, "SIGKILL"), 3000);
-    if (!opts.silent) await this.deps.notify("🛑 Session stopped.");
+    await this.deps.notify("🛑 Session stopped.");
   }
 
   /**

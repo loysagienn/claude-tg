@@ -1,7 +1,6 @@
-import { InputFile, InlineKeyboard } from "grammy";
+import { InputFile } from "grammy";
 import { loadConfig } from "./config.js";
 import { ChatStore } from "./chatStore.js";
-import { ButtonStore } from "./buttonStore.js";
 import { MessageHub } from "./messageHub.js";
 import { createBot } from "./bot.js";
 import { createMcpServer } from "./mcp.js";
@@ -20,9 +19,6 @@ const config = loadConfig();
 
 const store = new ChatStore(config.chatIdFile);
 store.load();
-
-const buttonStore = new ButtonStore(config.buttonIdFile);
-buttonStore.load();
 
 const hub = new MessageHub();
 
@@ -65,51 +61,15 @@ const requireChat = (): string => {
   return chatId;
 };
 
-// Single-button inline keyboard attached to narration messages (tg_send_message
-// / tg_send_photo). Clicking it stops the live session — handled in the bot's
-// callback handler. The callback_data is what that handler matches on.
-const okKeyboard = new InlineKeyboard().text("OK", "stop_session");
-
-// Remove the inline button from the message that currently carries it, if any.
-// Called before sending any new message and on every incoming message / button
-// click, so at most one (the latest) narration message ever shows the button.
-const clearButton = async (): Promise<void> => {
-  const messageId = buttonStore.get();
-  if (messageId === null) return;
-  // Drop the tracked id first so a failed/duplicate edit can't loop or re-edit.
-  buttonStore.clear();
-  const chatId = store.get();
-  if (!chatId) return;
-  try {
-    await bot.api.editMessageReplyMarkup(chatId, messageId);
-  } catch {
-    // The message is gone or already has no markup — nothing to do.
-  }
-};
-
-const sendMessage = async (
-  text: string,
-  opts: { withButton?: boolean } = {},
-): Promise<void> => {
-  // Always strip any prior button before sending the next message.
-  await clearButton();
+const sendMessage = async (text: string): Promise<void> => {
   const chunks = formatTelegramMarkdown(text, TELEGRAM_MESSAGE_LIMIT);
   if (chunks.length === 0) throw new Error("message is empty after formatting");
-  for (const [index, chunk] of chunks.entries()) {
-    const isLast = index === chunks.length - 1;
-    const message = await bot.api.sendMessage(requireChat(), chunk, {
-      parse_mode: "HTML",
-      ...(opts.withButton && isLast ? { reply_markup: okKeyboard } : {}),
-    });
-    if (opts.withButton && isLast) buttonStore.set(message.message_id);
+  for (const chunk of chunks) {
+    await bot.api.sendMessage(requireChat(), chunk, { parse_mode: "HTML" });
   }
 };
 
-const sendPhoto = async (
-  photo: string,
-  caption?: string,
-  opts: { withButton?: boolean } = {},
-): Promise<void> => {
+const sendPhoto = async (photo: string, caption?: string): Promise<void> => {
   const isUrl = /^https?:\/\//i.test(photo);
 
   // Rule: local files are re-hosted on Spaces first, then sent to Telegram by
@@ -130,31 +90,15 @@ const sendPhoto = async (
     : [];
   const [firstCaption, ...overflow] = captionChunks;
 
-  await clearButton();
-  const message = await bot.api.sendPhoto(requireChat(), media, {
+  await bot.api.sendPhoto(requireChat(), media, {
     ...(firstCaption ? { caption: firstCaption, parse_mode: "HTML" as const } : {}),
-    ...(opts.withButton && overflow.length === 0
-      ? { reply_markup: okKeyboard }
-      : {}),
   });
-  if (opts.withButton && overflow.length === 0) {
-    buttonStore.set(message.message_id);
-  }
-  for (const [index, chunk] of overflow.entries()) {
-    const isLast = index === overflow.length - 1;
-    const sent = await bot.api.sendMessage(requireChat(), chunk, {
-      parse_mode: "HTML",
-      ...(opts.withButton && isLast ? { reply_markup: okKeyboard } : {}),
-    });
-    if (opts.withButton && isLast) buttonStore.set(sent.message_id);
+  for (const chunk of overflow) {
+    await bot.api.sendMessage(requireChat(), chunk, { parse_mode: "HTML" });
   }
 };
 
-const sendDocument = async (
-  file: string,
-  caption?: string,
-  opts: { withButton?: boolean } = {},
-): Promise<void> => {
+const sendDocument = async (file: string, caption?: string): Promise<void> => {
   const isUrl = /^https?:\/\//i.test(file);
 
   // Unlike photos, documents are NOT re-hosted on Spaces: a direct multipart
@@ -167,27 +111,15 @@ const sendDocument = async (
     : [];
   const [firstCaption, ...overflow] = captionChunks;
 
-  await clearButton();
-  const message = await bot.api.sendDocument(requireChat(), media, {
+  await bot.api.sendDocument(requireChat(), media, {
     ...(firstCaption ? { caption: firstCaption, parse_mode: "HTML" as const } : {}),
-    ...(opts.withButton && overflow.length === 0
-      ? { reply_markup: okKeyboard }
-      : {}),
   });
-  if (opts.withButton && overflow.length === 0) {
-    buttonStore.set(message.message_id);
-  }
-  for (const [index, chunk] of overflow.entries()) {
-    const isLast = index === overflow.length - 1;
-    const sent = await bot.api.sendMessage(requireChat(), chunk, {
-      parse_mode: "HTML",
-      ...(opts.withButton && isLast ? { reply_markup: okKeyboard } : {}),
-    });
-    if (opts.withButton && isLast) buttonStore.set(sent.message_id);
+  for (const chunk of overflow) {
+    await bot.api.sendMessage(requireChat(), chunk, { parse_mode: "HTML" });
   }
 };
 
-const bot = createBot(config, store, hub, supervisor, clearButton);
+const bot = createBot(config, store, hub, supervisor);
 
 const app = createHttpServer(() =>
   createMcpServer({
@@ -226,6 +158,7 @@ process.on("SIGTERM", () => process.exit(143));
 void bot.api
   .setMyCommands([
     { command: "agent", description: "Выбрать агента (claude/codex) и запустить сессию" },
+    { command: "stop", description: "Остановить активную сессию" },
   ])
   .catch((err) => console.warn("setMyCommands failed:", err));
 
