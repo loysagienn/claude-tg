@@ -40,19 +40,15 @@ The server converts Markdown to a whitelist of Telegram HTML, escapes all raw
 HTML from the agent, and sends with `parse_mode: "HTML"`. It also splits output
 without breaking tags or entities: regular messages use Telegram's 4096-character
 limit and captions use the 1024-character limit. Caption overflow is sent as
-one or more immediately following text messages. The inline **OK** button is
-attached only to the final emitted message.
+one or more immediately following text messages.
 
-### The "OK" stop button
+### Stopping a session
 
-Every `tg_send_message` and `tg_send_photo` is sent with a single inline button
-labelled **OK**, and the id of that message is remembered in `BUTTON_ID_FILE`.
-The button is a stop affordance: tapping it kills the live session **silently**
-(no "🛑 Session stopped." notice) and then removes the button. Only the latest
-narration message carries the button — it is stripped from the previous one
-before every outgoing message and on every incoming message, so there is at most
-one live button at a time. `tg_ask` prompts and status notices are sent without
-a button.
+Sending `/stop` kills the live session (the supervisor consumes the message
+and replies "🛑 Session stopped."). There is no inline stop button — an
+earlier "OK" button affordance was removed because it was too easy to tap
+accidentally, and plain `stop` text is deliberately not a command so it can't
+be triggered by ordinary conversation.
 
 ### How incoming messages flow
 
@@ -97,8 +93,9 @@ The basic flow for a session you start by messaging the bot:
   its pending `tg_get_messages` call. The system prompt instructs the session
   to loop on `tg_get_messages(waitSeconds: 3600)` between tasks, so one process
   stays alive across the whole dialog and never ends its turn on its own.
-- **`stop`** (case-insensitive) → the supervisor kills the child (SIGTERM, then
-  SIGKILL after 3s). Send any message afterwards to start a fresh session.
+- **`/stop`** (case-insensitive) → the supervisor kills the child (SIGTERM,
+  then SIGKILL after 3s). Send any message afterwards to start a fresh
+  session.
 
 If the child exits on its own, you get a Telegram notice and the next message
 starts a new session.
@@ -111,7 +108,7 @@ starts a fresh session of that agent (with a generic "greet and wait for
 instructions" first prompt). This is the **only** way to start a codex session;
 plain messages always start claude.
 
-- If a session is already live, the tap is rejected with an alert (send `stop`
+- If a session is already live, the tap is rejected with an alert (send `/stop`
   first) — mirroring how plain messages never queue behind a live session.
 - The picker message is edited into "🚀 Запускаю сессию агента …" after the
   choice, so the buttons can't be re-used.
@@ -122,8 +119,7 @@ plain messages always start claude.
   `tool_timeout_sec=3700` so the 3600s `tg_get_messages` idle loop isn't
   killed client-side. Codex has no `--append-system-prompt`, so the TG-agent
   instructions are prepended to the initial prompt instead. Everything else —
-  the message flow, `stop`, the OK button, the JSONL session log — works the
-  same.
+  the message flow, `/stop`, the JSONL session log — works the same.
 - Codex auth lives in `~/.codex` (ChatGPT OAuth via `codex login`); the binary
   is symlinked at `~/.local/bin/codex` (override with `CODEX_BIN`).
 
@@ -145,7 +141,7 @@ and returns the error to the session so it can react rather than stall silently.
 
 The session is spawned as the leader of its own process group, and the
 supervisor SIGKILLs that whole group (claude **and** anything it spawned) when
-the node process exits — via the `stop` command, a `SIGINT`/`SIGTERM`, or an
+the node process exits — via the `/stop` command, a `SIGINT`/`SIGTERM`, or an
 uncaught exception. So the session never outlives its supervisor and no orphan
 is left behind. The one case this can't cover is a `SIGKILL` to the node
 process itself, which the OS delivers untrappably; run node under an OS
@@ -172,7 +168,7 @@ first instruction. Differences from a message-started session:
   sends you (`tg_send_message` / `tg_send_photo` / `tg_ask`). So it does its
   task, reports, and stays available for follow-up for up to 30 min, then dies
   on its own. (Message-started sessions have no timeout — they live until
-  `stop`.) `stop` kills whichever session is active, scheduled or not.
+  `/stop`.) `/stop` kills whichever session is active, scheduled or not.
 - **Announced.** You get a `🕘 Запускаю расписанную сессию: <name>` notice when
   it starts and a `⏰` notice when it dies on the inactivity timeout, so sessions
   never appear or vanish unexplained.
@@ -223,7 +219,6 @@ Copy `.env.example` to `.env` and fill it in (loaded via Node's built-in
 | `PORT` | no | `8765` | MCP HTTP port. |
 | `HOST` | no | `127.0.0.1` | Keep on loopback; do not expose. |
 | `CHAT_ID_FILE` | no | `chat-id.json` | Where the learned chat id is stored. |
-| `BUTTON_ID_FILE` | no | `button-id.json` | Where the id of the message bearing the "OK" button is stored. |
 | `SCHEDULES_FILE` | no | `schedules.json` | Where scheduled sessions are stored (read at startup). |
 | `DOWNLOAD_DIR` | no | `~/artifacts/claude-tg` | Where incoming photos/files from the user are saved. |
 | `CLAUDE_BIN` | no | `~/.local/bin/claude` | Path to the `claude` CLI used for spawned sessions. |
